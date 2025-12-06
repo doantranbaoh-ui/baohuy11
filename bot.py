@@ -1,68 +1,36 @@
 #!/usr/bin/env python3
-import telebot, sqlite3, threading, time, random, string, secrets, traceback
+import telebot, sqlite3, threading, time, random, string, secrets, traceback, os
 from telebot import types
 try:
     from keep_alive import keep_alive
 except:
-    def keep_alive():
-        print("keep_alive not provided, continuing without it")
+    def keep_alive(): print("keep_alive not found, continuing")
 
-# ================= CONFIG =================
+# ================== CONFIG ==================
 TOKEN = "6367532329:AAFTX43OlmNc0JpSwOagE8W0P22yOBH0lLU"
-OWNER_ID = 5736655322
+OWNER_ID = 5736655322  # Thay bằng ID của bạn
 PRICE_RANDOM = 2000
 DAILY_REPORT_HOUR = 24*60*60  # 24h
 
 bot = telebot.TeleBot(TOKEN, parse_mode="Markdown")
 
-# ================= DB =================
+# ================== DATABASE ==================
 conn = sqlite3.connect("data.db", check_same_thread=False)
 c = conn.cursor()
 
 def init_db():
-    # Users
-    c.execute("""CREATE TABLE IF NOT EXISTS users(
-        user_id TEXT PRIMARY KEY,
-        balance INTEGER DEFAULT 0
-    )""")
-    # Stock acc
-    c.execute("""CREATE TABLE IF NOT EXISTS stock_acc(
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        acc TEXT
-    )""")
-    # Purchases
-    c.execute("""CREATE TABLE IF NOT EXISTS purchases(
-        user_id TEXT,
-        acc TEXT,
-        time TEXT
-    )""")
-    # Giftcode
-    c.execute("""CREATE TABLE IF NOT EXISTS giftcode(
-        code TEXT PRIMARY KEY,
-        amount INTEGER,
-        used_by TEXT
-    )""")
-    # Bills
-    c.execute("""CREATE TABLE IF NOT EXISTS bills(
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id TEXT,
-        file_id TEXT,
-        amount INTEGER,
-        status TEXT,
-        created_at TEXT
-    )""")
-    # Admins
-    c.execute("""CREATE TABLE IF NOT EXISTS admins(
-        user_id TEXT PRIMARY KEY,
-        level INTEGER DEFAULT 1
-    )""")
-    # Owner
+    c.execute("""CREATE TABLE IF NOT EXISTS users(user_id TEXT PRIMARY KEY,balance INTEGER DEFAULT 0)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS stock_acc(id INTEGER PRIMARY KEY AUTOINCREMENT,acc TEXT)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS purchases(user_id TEXT,acc TEXT,time TEXT)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS giftcode(code TEXT PRIMARY KEY,amount INTEGER,used_by TEXT)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS bills(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id TEXT,file_id TEXT,amount INTEGER,status TEXT,created_at TEXT)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS admins(user_id TEXT PRIMARY KEY,level INTEGER DEFAULT 1)""")
     c.execute("INSERT OR IGNORE INTO admins(user_id,level) VALUES (?,?)",(str(OWNER_ID),3))
     conn.commit()
 init_db()
 db_lock = threading.Lock()
 
-# ================= UTILS =================
+# ================== UTILS ==================
 def log_exc(tag="ERR"):
     print(f"--- {tag} ---")
     traceback.print_exc()
@@ -77,7 +45,7 @@ def get_balance(uid:str):
     ensure_user(uid)
     with db_lock:
         c.execute("SELECT balance FROM users WHERE user_id=?",(uid,))
-        r = c.fetchone()
+        r=c.fetchone()
     return int(r[0]) if r else 0
 
 def add_money(uid:str,amount:int):
@@ -97,7 +65,7 @@ def deduct(uid:str,amount:int):
 def get_role(uid):
     with db_lock:
         c.execute("SELECT level FROM admins WHERE user_id=?",(str(uid),))
-        r = c.fetchone()
+        r=c.fetchone()
     return int(r[0]) if r else 0
 
 def is_owner(uid): return get_role(uid)==3
@@ -111,7 +79,7 @@ def send_main_menu(chat_id):
     kb.row("🎰 Slot","🎁 Redeem")
     bot.send_message(chat_id,"Chọn chức năng:",reply_markup=kb)
 
-# ================= COMMANDS =================
+# ================== COMMANDS ==================
 @bot.message_handler(commands=["start","help"])
 def cmd_start(m):
     try:
@@ -126,7 +94,19 @@ def cmd_sodu(m):
         bot.reply_to(m,f"💰 Số dư: *{get_balance(str(m.from_user.id))}đ*",parse_mode="Markdown")
     except: log_exc("/sodu")
 
-# ================= MUA RANDOM =================
+@bot.message_handler(commands=["myacc"])
+def cmd_myacc(m):
+    try:
+        uid=str(m.from_user.id)
+        with db_lock:
+            c.execute("SELECT acc,time FROM purchases WHERE user_id=?",(uid,))
+            rows=c.fetchall()
+        if not rows: return bot.reply_to(m,"📭 Bạn chưa mua acc nào.")
+        text="\n".join([f"• `{r[0]}` | {r[1]}" for r in rows])
+        bot.reply_to(m,f"📄 ACC đã mua:\n{text}",parse_mode="Markdown")
+    except: log_exc("/myacc")
+
+# ================== MUA RANDOM ==================
 @bot.message_handler(commands=["random"])
 def cmd_random(m):
     try:
@@ -158,44 +138,97 @@ def cb_buy_confirm(call):
         add_money(str(call.from_user.id),PRICE_RANDOM)
         bot.answer_callback_query(call.id,"Có lỗi, tiền đã hoàn lại",show_alert=True)
 
-@bot.message_handler(commands=["myacc"])
-def cmd_myacc(m):
-    try:
-        uid=str(m.from_user.id)
-        with db_lock:
-            c.execute("SELECT acc,time FROM purchases WHERE user_id=?",(uid,))
-            rows=c.fetchall()
-        if not rows:
-            return bot.reply_to(m,"📭 Bạn chưa mua acc nào.")
-        text="\n".join([f"• `{r[0]}` | {r[1]}" for r in rows])
-        bot.reply_to(m,f"📄 ACC đã mua:\n{text}",parse_mode="Markdown")
-    except: log_exc("/myacc")
-
-# ================= GIFT CODE =================
-def make_code(n=10):
-    alphabet=string.ascii_uppercase+string.digits
-    return ''.join(secrets.choice(alphabet) for _ in range(n))
-
-@bot.message_handler(commands=["redeem"])
-def cmd_redeem(m):
+# ================== NẠP TIỀN (BILL) ==================
+@bot.message_handler(commands=["nap"])
+def cmd_nap(m):
     try:
         parts=m.text.split()
-        if len(parts)<2: return bot.reply_to(m,"📌 /redeem <code>")
-        code=parts[1].upper()
-        with db_lock:
-            c.execute("SELECT amount,used_by FROM giftcode WHERE code=?",(code,))
-            r=c.fetchone()
-        if not r: return bot.reply_to(m,"❌ Code không tồn tại")
-        if r[1] is not None: return bot.reply_to(m,"⚠ Code đã được sử dụng")
-        uid=str(m.from_user.id)
-        add_money(uid,int(r[0]))
-        with db_lock:
-            c.execute("UPDATE giftcode SET used_by=? WHERE code=?",(uid,code))
-            conn.commit()
-        bot.reply_to(m,f"🎉 Nhận {r[0]}đ từ giftcode `{code}`",parse_mode="Markdown")
-    except: log_exc("/redeem")
+        if len(parts)<2: return bot.reply_to(m,"📌 /nap <sotien>")
+        amount=int(parts[1])
+        txt=f"💳 Hướng dẫn nạp tiền:\n• STK: *0971487462*\n• Ngân hàng: MB\n• Nội dung: `{m.from_user.id}`\n• Số tiền: *{amount}đ*\nGửi ảnh bill vào chat để admin duyệt."
+        bot.reply_to(m,txt,parse_mode="Markdown")
+    except: log_exc("/nap")
 
-# ================= MINI GAMES =================
+@bot.message_handler(content_types=["photo"])
+def handle_photo(msg):
+    try:
+        uid=str(msg.from_user.id)
+        file_id=msg.photo[-1].file_id
+        with db_lock:
+            c.execute("INSERT INTO bills(user_id,file_id,amount,status,created_at) VALUES(?,?,?,?,?)",(uid,file_id,0,"pending",time.ctime()))
+            conn.commit()
+            bill_id=c.lastrowid
+        bot.reply_to(msg,f"⏳ Hoá đơn đã gửi, chờ admin duyệt. (Bill ID: {bill_id})")
+        # Gửi admin
+        for ad in [OWNER_ID]:
+            try:
+                kb=types.InlineKeyboardMarkup(row_width=2)
+                kb.add(types.InlineKeyboardButton("✔ Duyệt (10k)",callback_data=f"bill_accept:{bill_id}:10000"),
+                       types.InlineKeyboardButton("✔ Duyệt (20k)",callback_data=f"bill_accept:{bill_id}:20000"))
+                kb.add(types.InlineKeyboardButton("✏️ Duyệt Tùy",callback_data=f"bill_prompt:{bill_id}"),
+                       types.InlineKeyboardButton("❌ Từ chối",callback_data=f"bill_reject:{bill_id}"))
+                bot.send_photo(int(ad),file_id,caption=f"Bill #{bill_id} từ {uid}",reply_markup=kb)
+            except: pass
+    except: log_exc("photo handler")
+
+@bot.callback_query_handler(func=lambda c:c.data.startswith("bill_"))
+def cb_handle_bill(call):
+    try:
+        parts=call.data.split(":")
+        action=parts[0]; bill_id=int(parts[1])
+        caller=call.from_user.id
+        if not is_admin(caller): return bot.answer_callback_query(call.id,"Không có quyền",show_alert=True)
+        if action=="bill_accept":
+            amount=int(parts[2])
+            with db_lock:
+                c.execute("SELECT user_id,status FROM bills WHERE id=?",(bill_id,))
+                r=c.fetchone()
+                if not r: return bot.answer_callback_query(call.id,"Bill không tồn tại")
+                if r[1]!="pending": return bot.answer_callback_query(call.id,"Bill đã xử lý")
+                user_id=r[0]
+                c.execute("UPDATE bills SET amount=?,status=? WHERE id=?",(amount,"approved",bill_id))
+                conn.commit()
+            add_money(user_id,amount)
+            bot.send_message(user_id,f"✅ Bill #{bill_id} đã được duyệt. Nhận {amount}đ")
+            bot.answer_callback_query(call.id,f"Duyệt & cộng {amount}đ")
+        elif action=="bill_reject":
+            with db_lock:
+                c.execute("SELECT user_id,status FROM bills WHERE id=?",(bill_id,))
+                r=c.fetchone()
+                if not r: return bot.answer_callback_query(call.id,"Bill không tồn tại")
+                if r[1]!="pending": return bot.answer_callback_query(call.id,"Bill đã xử lý")
+                user_id=r[0]
+                c.execute("UPDATE bills SET status=? WHERE id=?","rejected",bill_id)
+                conn.commit()
+            bot.send_message(user_id,f"❌ Bill #{bill_id} bị từ chối")
+            bot.answer_callback_query(call.id,"Đã từ chối")
+        elif action=="bill_prompt":
+            bot.answer_callback_query(call.id,"Nhập /setbill <id> <amount>")
+            bot.send_message(call.from_user.id,f"/setbill {bill_id} 15000")
+    except: log_exc("cb_handle_bill")
+
+@bot.message_handler(commands=["setbill"])
+def cmd_setbill(m):
+    try:
+        if not is_admin(m.from_user.id): return
+        parts=m.text.split()
+        if len(parts)<3: return bot.reply_to(m,"📌 /setbill <bill_id> <amount>")
+        bill_id=int(parts[1]); amount=int(parts[2])
+        with db_lock:
+            c.execute("SELECT user_id,status FROM bills WHERE id=?",(bill_id,))
+            r=c.fetchone()
+            if not r: return bot.reply_to(m,"Bill không tồn tại")
+            if r[1]!="pending": return bot.reply_to(m,"Bill đã xử lý")
+            user_id=r[0]
+            c.execute("UPDATE bills SET amount=?,status=? WHERE id=?",(amount,"approved",bill_id))
+            conn.commit()
+        add_money(user_id,amount)
+        bot.reply_to(m,f"Đã duyệt bill #{bill_id}, cộng {amount}đ cho {user_id}")
+        try: bot.send_message(user_id,f"✅ Bill #{bill_id} đã được duyệt. Nhận {amount}đ")
+        except: pass
+    except: log_exc("/setbill")
+
+# ================== MINI GAMES ==================
 @bot.message_handler(commands=["dice"])
 def cmd_dice(m):
     try:
@@ -217,43 +250,95 @@ def cmd_slot(m):
             bot.reply_to(m,f"🎰 {' '.join(s)}\n😢 Thua rồi")
     except: log_exc("/slot")
 
-# ================= ADMIN LEVEL =================
-@bot.message_handler(commands=["addadmin"])
-def cmd_addadmin(m):
-    if not is_owner(m.from_user.id): return bot.reply_to(m,"⛔ Chỉ OWNER được thêm admin")
+# ================== ADMIN: QUẢN LÝ KHO ==================
+@bot.message_handler(commands=["addacc"])
+def cmd_addacc(m):
+    if not is_admin(m.from_user.id): return
+    data=m.text.replace("/addacc","").strip()
+    if not data: return bot.reply_to(m,"📌 /addacc email:pass")
+    with db_lock:
+        c.execute("INSERT INTO stock_acc(acc) VALUES(?)",(data,))
+        conn.commit()
+    bot.reply_to(m,"➕ Đã thêm acc vào kho")
+
+@bot.message_handler(commands=["stock"])
+def cmd_stock(m):
+    if not is_admin(m.from_user.id): return
+    with db_lock:
+        c.execute("SELECT COUNT(*) FROM stock_acc")
+        cnt=c.fetchone()[0]
+    bot.reply_to(m,f"📦 Còn {cnt} ACC trong kho")
+
+@bot.message_handler(commands=["listacc"])
+def cmd_listacc(m):
+    if not is_admin(m.from_user.id): return
+    limit=100
+    with db_lock:
+        c.execute("SELECT id,acc FROM stock_acc LIMIT ?",(limit,))
+        rows=c.fetchall()
+    if not rows: return bot.reply_to(m,"Kho trống")
+    text="\n".join([f"{r[0]}. {r[1]}" for r in rows])
+    bot.reply_to(m,f"📄 Danh sách (max {limit}):\n{text}\n/delacc <id>")
+
+@bot.message_handler(commands=["delacc"])
+def cmd_delacc(m):
+    if not is_admin(m.from_user.id): return
+    try: aid=int(m.text.split()[1])
+    except: return bot.reply_to(m,"📌 /delacc <id>")
+    with db_lock:
+        c.execute("DELETE FROM stock_acc WHERE id=?",(aid,))
+        conn.commit()
+    bot.reply_to(m,"🗑 Đã xoá acc")
+
+@bot.message_handler(commands=["delall"])
+def cmd_delall(m):
+    if not is_admin(m.from_user.id): return
+    with db_lock:
+        c.execute("DELETE FROM stock_acc")
+        conn.commit()
+    bot.reply_to(m,"🔥 Đã xoá toàn bộ kho")
+
+@bot.message_handler(commands=["export"])
+def cmd_export(m):
+    if not is_admin(m.from_user.id): return
+    with db_lock:
+        c.execute("SELECT acc FROM stock_acc")
+        rows=c.fetchall()
+    path="stock_export.txt"
+    with open(path,"w",encoding="utf-8") as f:
+        for r in rows: f.write(r[0]+"\n")
+    bot.send_document(m.chat.id,open(path,"rb"))
+    try: os.remove(path)
+    except: pass
+
+# ================== ADMIN: MONEY & BROADCAST ==================
+@bot.message_handler(commands=["addmoney"])
+def cmd_addmoney(m):
+    if not is_admin(m.from_user.id): return
     try:
-        _,uid,level=m.text.split()
-        uid,level=int(uid),int(level)
-        with db_lock:
-            c.execute("INSERT OR REPLACE INTO admins(user_id,level) VALUES (?,?)",(str(uid),level))
-            conn.commit()
-        bot.reply_to(m,"✔ Thêm admin thành công")
-    except:
-        bot.reply_to(m,"❌ Sai cú pháp. Ví dụ:\n/addadmin 123456 2")
+        _,uid,amount=m.text.split()
+        uid=uid; amount=int(amount)
+        add_money(uid,amount)
+        bot.reply_to(m,f"Đã cộng {amount}đ cho {uid}")
+        try: bot.send_message(int(uid),f"✅ Admin đã cộng {amount}đ")
+        except: pass
+    except: log_exc("/addmoney")
 
-@bot.message_handler(commands=["deladmin"])
-def cmd_deladmin(m):
-    if not is_owner(m.from_user.id): return bot.reply_to(m,"⛔ Chỉ OWNER được xoá admin")
-    try:
-        _,uid=m.text.split()
-        with db_lock:
-            c.execute("DELETE FROM admins WHERE user_id=?",(uid,))
-            conn.commit()
-        bot.reply_to(m,"✔ Đã xoá admin")
-    except:
-        bot.reply_to(m,"❌ Sai cú pháp")
+@bot.message_handler(commands=["broadcast"])
+def cmd_broadcast(m):
+    if not is_admin(m.from_user.id): return
+    text=m.text.replace("/broadcast","").strip()
+    if not text: return bot.reply_to(m,"📌 /broadcast <message>")
+    with db_lock:
+        c.execute("SELECT user_id FROM users")
+        users=c.fetchall()
+    sent=0
+    for u in users:
+        try: bot.send_message(int(u[0]),text); sent+=1
+        except: pass
+    bot.reply_to(m,f"Đã gửi đến {sent} users")
 
-@bot.message_handler(commands=["listadmin"])
-def cmd_listadmin(m):
-    if not is_support(m.from_user.id): return bot.reply_to(m,"⛔ Bạn không đủ quyền")
-    rows = c.execute("SELECT user_id,level FROM admins").fetchall()
-    text="📜 Admin:\n"
-    for i in rows:
-        role={1:"Support",2:"Admin",3:"Owner"}[i[1]]
-        text+=f"• `{i[0]}` - {role}\n"
-    bot.reply_to(m,text,parse_mode="Markdown")
-
-# ================= DAILY REPORT =================
+# ================== DAILY REPORT ==================
 def daily_report_thread():
     while True:
         try:
@@ -265,7 +350,7 @@ def daily_report_thread():
         time.sleep(DAILY_REPORT_HOUR)
 threading.Thread(target=daily_report_thread,daemon=True).start()
 
-# ================= START BOT =================
+# ================== START BOT ==================
 keep_alive()
 print("BOT STARTED!")
 while True:
