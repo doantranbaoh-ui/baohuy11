@@ -5,7 +5,7 @@ from telebot import types
 import sqlite3, random, time, threading, traceback, string, secrets, os
 
 # ================== CẤU HÌNH ==================
-TOKEN = "YOUR_BOT_TOKEN"   # <-- Thay token ở đây
+TOKEN = "6367532329:AAFTX43OlmNc0JpSwOagE8W0P22yOBH0lLU"   # <-- Thay token ở đây
 ADMINS = ["5736655322"]    # <-- ID admin (string list)
 PRICE_RANDOM = 2000        # giá 1 acc random
 DAILY_REPORT_HOUR = 24*60*60  # 24h
