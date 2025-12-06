@@ -25,8 +25,8 @@ def init_db():
             c.execute("""CREATE TABLE IF NOT EXISTS giftcode(code TEXT PRIMARY KEY,amount INTEGER,used_by TEXT)""")
             c.execute("""CREATE TABLE IF NOT EXISTS admins(user_id TEXT PRIMARY KEY,level INTEGER DEFAULT 3)""")
             c.execute("INSERT OR IGNORE INTO admins(user_id,level) VALUES (?,?)",(str(OWNER_ID),3))
-    except Exception:
-        traceback.print_exc()
+    except Exception as e:
+        print("INIT DB ERROR:", e)
 init_db()
 
 # ================= UTILS =================
@@ -92,15 +92,10 @@ def make_code(n=10):
 # ================= USER MENU =================
 def send_user_menu(chat_id):
     try:
-        kb = types.InlineKeyboardMarkup(row_width=2)
-        kb.add(
-            types.InlineKeyboardButton("🛍 Mua Random", callback_data="buy_acc"),
-            types.InlineKeyboardButton("🎁 Redeem", callback_data="redeem_code")
-        )
-        kb.add(
-            types.InlineKeyboardButton("🎲 Dice", callback_data="dice_game"),
-            types.InlineKeyboardButton("🎰 Slot", callback_data="slot_game")
-        )
+        kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+        kb.row("🛍 Mua Random","📦 ACC đã mua")
+        kb.row("💰 Số dư","🎲 Dice")
+        kb.row("🎰 Slot","🎁 Redeem")
         bot.send_message(chat_id,"Chọn chức năng:",reply_markup=kb)
     except Exception:
         log_exc("send_user_menu")
@@ -112,8 +107,7 @@ def cmd_start(m):
         ensure_user(str(m.from_user.id))
         text = (
             "🎮 *SHOP ACC RANDOM*\n\n"
-            "💡 Bạn có thể sử dụng **nút menu** hoặc gõ lệnh:\n\n"
-            "📌 *Lệnh user:*\n"
+            "💡 Bạn có thể sử dụng **nút menu** hoặc gõ lệnh:\n"
             "/sodu - Xem số dư\n"
             "/myacc - Xem acc đã mua\n"
             "/random - Mua ACC random\n"
@@ -127,7 +121,7 @@ def cmd_start(m):
     except Exception:
         log_exc("/start")
 
-# ================= USER BALANCE =================
+# ================= USER COMMANDS =================
 @bot.message_handler(commands=["sodu"])
 def cmd_sodu(m):
     try:
@@ -137,7 +131,6 @@ def cmd_sodu(m):
     except Exception:
         log_exc("/sodu")
 
-# ================= USER PURCHASED ACC =================
 @bot.message_handler(commands=["myacc"])
 def cmd_myacc(m):
     try:
@@ -153,7 +146,6 @@ def cmd_myacc(m):
     except Exception:
         log_exc("/myacc")
 
-# ================= RANDOM / MINI GAME =================
 @bot.message_handler(commands=["random"])
 def cmd_random(m):
     try:
@@ -200,7 +192,6 @@ def cmd_slot(m):
     except Exception:
         log_exc("/slot")
 
-# ================= REDEEM GIFT CODE =================
 @bot.message_handler(commands=["redeem"])
 def cmd_redeem(m):
     try:
@@ -343,7 +334,7 @@ def cmd_broadcast(m):
     except Exception:
         log_exc("/broadcast")
 
-# ================= ADMIN MONEY =================
+# ================= ADMIN ADD MONEY =================
 @bot.message_handler(commands=["addmoney"])
 def cmd_addmoney(m):
     if not is_admin(m.from_user.id): return
@@ -370,15 +361,16 @@ def daily_report_thread():
         except Exception:
             log_exc("daily_report")
         time.sleep(DAILY_REPORT_HOUR)
-
 threading.Thread(target=daily_report_thread,daemon=True).start()
+
+# ================= KEEP ALIVE =================
+keep_alive()
 
 # ================= START BOT =================
 print("BOT STARTED!")
-keep_alive()
 while True:
     try:
-        bot.infinity_polling(timeout=60,long_polling_timeout=60,skip_pending=False)
+        bot.infinity_polling(timeout=60,long_polling_timeout=60,skip_pending=True)
     except Exception as e:
         print("BOT CRASH:",e)
         time.sleep(5)
