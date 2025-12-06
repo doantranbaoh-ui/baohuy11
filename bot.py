@@ -110,9 +110,19 @@ def send_user_menu(chat_id):
 def cmd_start(m):
     try:
         ensure_user(str(m.from_user.id))
-        bot.reply_to(m,
-        "🎮 *SHOP ACC RANDOM*\nChào bạn!\n\nLệnh chính:\n/myacc - Xem acc đã mua\n/sodu - Xem số dư\n/nap - Nạp tiền\n/redeem <code> - Nhập giftcode",
-        parse_mode="Markdown")
+        text = (
+            "🎮 *SHOP ACC RANDOM*\n\n"
+            "💡 Bạn có thể sử dụng **nút menu** hoặc gõ lệnh:\n\n"
+            "📌 *Lệnh user:*\n"
+            "/sodu - Xem số dư\n"
+            "/myacc - Xem acc đã mua\n"
+            "/random - Mua ACC random\n"
+            "/dice - Chơi Dice\n"
+            "/slot - Chơi Slot\n"
+            "/redeem <code> - Nhập giftcode\n"
+            "/nap <sotien> - Gửi yêu cầu nạp tiền\n"
+        )
+        bot.reply_to(m,text,parse_mode="Markdown")
         send_user_menu(m.chat.id)
     except Exception:
         log_exc("/start")
@@ -121,7 +131,9 @@ def cmd_start(m):
 @bot.message_handler(commands=["sodu"])
 def cmd_sodu(m):
     try:
-        bot.reply_to(m,f"💰 Số dư hiện tại: *{get_balance(str(m.from_user.id))}đ*", parse_mode="Markdown")
+        uid = str(m.from_user.id)
+        bal = get_balance(uid)
+        bot.reply_to(m,f"💰 Số dư: *{bal}đ*", parse_mode="Markdown")
     except Exception:
         log_exc("/sodu")
 
@@ -141,47 +153,79 @@ def cmd_myacc(m):
     except Exception:
         log_exc("/myacc")
 
-# ================= CALLBACK INLINE USER =================
-@bot.callback_query_handler(func=lambda c: True)
-def handle_callback(call):
+# ================= RANDOM / MINI GAME =================
+@bot.message_handler(commands=["random"])
+def cmd_random(m):
     try:
-        uid = str(call.from_user.id)
-        if call.data == "buy_acc":
-            if deduct(uid, PRICE_RANDOM):
-                with db_lock:
-                    c.execute("SELECT id,acc FROM stock_acc ORDER BY RANDOM() LIMIT 1")
-                    row = c.fetchone()
-                    if not row:
-                        add_money(uid, PRICE_RANDOM)
-                        bot.answer_callback_query(call.id,"⚠ Hết hàng, tiền đã hoàn lại", show_alert=True)
-                        return
-                    acc_id, acc_val = row
-                    c.execute("DELETE FROM stock_acc WHERE id=?",(acc_id,))
-                    c.execute("INSERT INTO purchases(user_id,acc,time) VALUES(?,?,?)",(uid,acc_val,time.ctime()))
-                bot.send_message(uid,f"🛍 Bạn nhận được ACC:\n`{acc_val}`",parse_mode="Markdown")
-                bot.answer_callback_query(call.id,"Giao dịch thành công")
-            else:
-                bot.answer_callback_query(call.id,"❌ Không đủ tiền", show_alert=True)
-        elif call.data == "redeem_code":
-            bot.send_message(uid,"Nhập /redeem <code> để nhận giftcode")
-        elif call.data == "dice_game":
-            roll=random.randint(1,6)
-            reward=roll*200
-            add_money(uid,reward)
-            bot.answer_callback_query(call.id,f"🎲 Lắc ra {roll} → +{reward}đ")
-        elif call.data == "slot_game":
-            icons=['🍒','💎','⭐','7️⃣']
-            s=[random.choice(icons) for _ in range(3)]
-            if s.count(s[0])==3:
-                add_money(uid,10000)
-                bot.answer_callback_query(call.id,f"🎰 {' '.join(s)}\n🔥 JACKPOT +10000đ")
-            else:
-                bot.answer_callback_query(call.id,f"🎰 {' '.join(s)}\n😢 Thua rồi")
+        uid = str(m.from_user.id)
+        if deduct(uid, PRICE_RANDOM):
+            with db_lock:
+                c.execute("SELECT id,acc FROM stock_acc ORDER BY RANDOM() LIMIT 1")
+                row = c.fetchone()
+                if not row:
+                    add_money(uid, PRICE_RANDOM)
+                    bot.reply_to(m,"⚠ Hết hàng, tiền đã hoàn lại")
+                    return
+                acc_id, acc_val = row
+                c.execute("DELETE FROM stock_acc WHERE id=?",(acc_id,))
+                c.execute("INSERT INTO purchases(user_id,acc,time) VALUES(?,?,?)",(uid,acc_val,time.ctime()))
+            bot.reply_to(m,f"🛍 Bạn nhận được ACC:\n`{acc_val}`",parse_mode="Markdown")
+        else:
+            bot.reply_to(m,"❌ Không đủ tiền")
     except Exception:
-        log_exc("handle_callback")
-        try: bot.answer_callback_query(call.id,"❌ Lỗi, thử lại", show_alert=True)
-        except Exception:
-            pass
+        log_exc("/random")
+
+@bot.message_handler(commands=["dice"])
+def cmd_dice(m):
+    try:
+        uid = str(m.from_user.id)
+        roll = random.randint(1,6)
+        reward = roll*200
+        add_money(uid, reward)
+        bot.reply_to(m,f"🎲 Bạn lắc ra *{roll}* → +{reward}đ", parse_mode="Markdown")
+    except Exception:
+        log_exc("/dice")
+
+@bot.message_handler(commands=["slot"])
+def cmd_slot(m):
+    try:
+        uid = str(m.from_user.id)
+        icons = ['🍒','💎','⭐','7️⃣']
+        s = [random.choice(icons) for _ in range(3)]
+        if s.count(s[0])==3:
+            add_money(uid,10000)
+            bot.reply_to(m,f"🎰 {' '.join(s)}\n🔥 JACKPOT +10000đ")
+        else:
+            bot.reply_to(m,f"🎰 {' '.join(s)}\n😢 Thua rồi")
+    except Exception:
+        log_exc("/slot")
+
+# ================= REDEEM GIFT CODE =================
+@bot.message_handler(commands=["redeem"])
+def cmd_redeem(m):
+    try:
+        parts = m.text.split()
+        if len(parts)<2:
+            bot.reply_to(m,"📌 /redeem <code>")
+            return
+        uid = str(m.from_user.id)
+        code = parts[1].upper()
+        with db_lock:
+            c.execute("SELECT amount,used_by FROM giftcode WHERE code=?",(code,))
+            row = c.fetchone()
+            if not row:
+                bot.reply_to(m,"❌ Giftcode không tồn tại")
+                return
+            amount, used_by = row
+            if str(uid) in used_by.split(","):
+                bot.reply_to(m,"❌ Bạn đã dùng code này rồi")
+                return
+            new_used = used_by+","+uid if used_by else uid
+            c.execute("UPDATE giftcode SET used_by=? WHERE code=?",(new_used,code))
+        add_money(uid, amount)
+        bot.reply_to(m,f"✅ Nhận {amount}đ từ giftcode {code}")
+    except Exception:
+        log_exc("/redeem")
 
 # ================= NẠP TIỀN + BILL =================
 @bot.message_handler(commands=["nap"])
@@ -221,7 +265,7 @@ def handle_photo(msg):
     except Exception:
         log_exc("photo handler")
 
-# ================= BILL CALLBACK =================
+# ================= ADMIN BILL CALLBACK =================
 @bot.callback_query_handler(func=lambda c: c.data.startswith("bill_"))
 def cb_handle_bill(call):
     try:
@@ -259,7 +303,7 @@ def cb_handle_bill(call):
     except Exception:
         log_exc("cb_handle_bill")
 
-# ================= GIFT CODE =================
+# ================= ADMIN GIFT CODE =================
 @bot.message_handler(commands=["addcode"])
 def cmd_addcode(m):
     if not is_admin(m.from_user.id): return
@@ -275,32 +319,6 @@ def cmd_addcode(m):
         bot.reply_to(m,f"✅ Đã tạo giftcode {code} giá trị {amount}đ")
     except Exception:
         log_exc("/addcode")
-
-@bot.message_handler(commands=["redeem"])
-def cmd_redeem(m):
-    try:
-        parts = m.text.split()
-        if len(parts)<2:
-            bot.reply_to(m,"📌 /redeem <code>")
-            return
-        uid = str(m.from_user.id)
-        code = parts[1].upper()
-        with db_lock:
-            c.execute("SELECT amount,used_by FROM giftcode WHERE code=?",(code,))
-            row = c.fetchone()
-            if not row:
-                bot.reply_to(m,"❌ Giftcode không tồn tại")
-                return
-            amount, used_by = row
-            if str(uid) in used_by.split(","):
-                bot.reply_to(m,"❌ Bạn đã sử dụng code này rồi")
-                return
-            new_used = used_by+","+uid if used_by else uid
-            c.execute("UPDATE giftcode SET used_by=? WHERE code=?",(new_used,code))
-        add_money(uid, amount)
-        bot.reply_to(m,f"✅ Nhận {amount}đ từ giftcode {code}")
-    except Exception:
-        log_exc("/redeem")
 
 # ================= ADMIN BROADCAST =================
 @bot.message_handler(commands=["broadcast"])
