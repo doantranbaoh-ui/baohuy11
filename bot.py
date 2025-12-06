@@ -1,65 +1,58 @@
 #!/usr/bin/env python3
 import telebot, sqlite3, threading, time, random, string, secrets, traceback, os
 from telebot import types
-try:
-    from keep_alive import keep_alive
-except:
-    def keep_alive(): print("keep_alive not found, continuing")
 
-# ================== CONFIG ==================
-TOKEN = "6367532329:AAFTX43OlmNc0JpSwOagE8W0P22yOBH0lLU"
-OWNER_ID = 5736655322  # Thay bằng ID của bạn
+# ================= CONFIG =================
+TOKEN = "6367532329:AAFTX43OlmNc0JpSwOagE8W0P22yOBH0lLU"  # Thay bằng token mới
+OWNER_ID = 5736655322
 PRICE_RANDOM = 2000
-DAILY_REPORT_HOUR = 24*60*60  # 24h
+DAILY_REPORT_HOUR = 24*60*60
 
 bot = telebot.TeleBot(TOKEN, parse_mode="Markdown")
 
-# ================== DATABASE ==================
-conn = sqlite3.connect("data.db", check_same_thread=False)
+# ================= DB =================
+conn = sqlite3.connect("data.db", check_same_thread=False, isolation_level=None)
 c = conn.cursor()
-
-def init_db():
-    c.execute("""CREATE TABLE IF NOT EXISTS users(user_id TEXT PRIMARY KEY,balance INTEGER DEFAULT 0)""")
-    c.execute("""CREATE TABLE IF NOT EXISTS stock_acc(id INTEGER PRIMARY KEY AUTOINCREMENT,acc TEXT)""")
-    c.execute("""CREATE TABLE IF NOT EXISTS purchases(user_id TEXT,acc TEXT,time TEXT)""")
-    c.execute("""CREATE TABLE IF NOT EXISTS giftcode(code TEXT PRIMARY KEY,amount INTEGER,used_by TEXT)""")
-    c.execute("""CREATE TABLE IF NOT EXISTS bills(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id TEXT,file_id TEXT,amount INTEGER,status TEXT,created_at TEXT)""")
-    c.execute("""CREATE TABLE IF NOT EXISTS admins(user_id TEXT PRIMARY KEY,level INTEGER DEFAULT 1)""")
-    c.execute("INSERT OR IGNORE INTO admins(user_id,level) VALUES (?,?)",(str(OWNER_ID),3))
-    conn.commit()
-init_db()
 db_lock = threading.Lock()
 
-# ================== UTILS ==================
+def init_db():
+    with db_lock:
+        c.execute("""CREATE TABLE IF NOT EXISTS users(user_id TEXT PRIMARY KEY,balance INTEGER DEFAULT 0)""")
+        c.execute("""CREATE TABLE IF NOT EXISTS stock_acc(id INTEGER PRIMARY KEY AUTOINCREMENT,acc TEXT)""")
+        c.execute("""CREATE TABLE IF NOT EXISTS purchases(user_id TEXT,acc TEXT,time TEXT)""")
+        c.execute("""CREATE TABLE IF NOT EXISTS bills(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id TEXT,file_id TEXT,amount INTEGER,status TEXT,created_at TEXT)""")
+        c.execute("""CREATE TABLE IF NOT EXISTS giftcode(code TEXT PRIMARY KEY,amount INTEGER,used_by TEXT)""")
+        c.execute("""CREATE TABLE IF NOT EXISTS admins(user_id TEXT PRIMARY KEY,level INTEGER DEFAULT 3)""")
+        c.execute("INSERT OR IGNORE INTO admins(user_id,level) VALUES (?,?)",(str(OWNER_ID),3))
+init_db()
+
+# ================= UTILS =================
 def log_exc(tag="ERR"):
     print(f"--- {tag} ---")
     traceback.print_exc()
     print("-----------")
 
-def ensure_user(uid:str):
+def ensure_user(uid): 
     with db_lock:
         c.execute("INSERT OR IGNORE INTO users(user_id) VALUES(?)",(uid,))
-        conn.commit()
 
-def get_balance(uid:str):
+def get_balance(uid):
     ensure_user(uid)
     with db_lock:
         c.execute("SELECT balance FROM users WHERE user_id=?",(uid,))
         r=c.fetchone()
     return int(r[0]) if r else 0
 
-def add_money(uid:str,amount:int):
+def add_money(uid,amount):
     ensure_user(uid)
     with db_lock:
         c.execute("UPDATE users SET balance=balance+? WHERE user_id=?",(amount,uid))
-        conn.commit()
 
-def deduct(uid:str,amount:int):
+def deduct(uid,amount):
     bal=get_balance(uid)
     if bal<amount: return False
     with db_lock:
         c.execute("UPDATE users SET balance=? WHERE user_id=?",(bal-amount,uid))
-        conn.commit()
     return True
 
 def get_role(uid):
@@ -79,12 +72,15 @@ def send_main_menu(chat_id):
     kb.row("🎰 Slot","🎁 Redeem")
     bot.send_message(chat_id,"Chọn chức năng:",reply_markup=kb)
 
-# ================== COMMANDS ==================
+def make_code(n=10):
+    return ''.join(secrets.choice(string.ascii_uppercase+string.digits) for _ in range(n))
+
+# ================= HANDLER =================
 @bot.message_handler(commands=["start","help"])
 def cmd_start(m):
     try:
         ensure_user(str(m.from_user.id))
-        bot.reply_to(m,"🎮 *SHOP ACC RANDOM*\nChào bạn! Dùng menu bên dưới.",parse_mode="Markdown")
+        bot.reply_to(m,"🎮 *SHOP ACC RANDOM*\nChào bạn!",parse_mode="Markdown")
         send_main_menu(m.chat.id)
     except: log_exc("/start")
 
@@ -106,7 +102,7 @@ def cmd_myacc(m):
         bot.reply_to(m,f"📄 ACC đã mua:\n{text}",parse_mode="Markdown")
     except: log_exc("/myacc")
 
-# ================== MUA RANDOM ==================
+# ================= RANDOM =================
 @bot.message_handler(commands=["random"])
 def cmd_random(m):
     try:
@@ -130,7 +126,6 @@ def cb_buy_confirm(call):
             acc_id,acc_val=row
             c.execute("DELETE FROM stock_acc WHERE id=?",(acc_id,))
             c.execute("INSERT INTO purchases(user_id,acc,time) VALUES(?,?,?)",(uid,acc_val,time.ctime()))
-            conn.commit()
         bot.send_message(uid,f"🛍 Bạn nhận được ACC:\n`{acc_val}`",parse_mode="Markdown")
         bot.answer_callback_query(call.id,"Giao dịch thành công")
     except:
@@ -138,7 +133,7 @@ def cb_buy_confirm(call):
         add_money(str(call.from_user.id),PRICE_RANDOM)
         bot.answer_callback_query(call.id,"Có lỗi, tiền đã hoàn lại",show_alert=True)
 
-# ================== NẠP TIỀN (BILL) ==================
+# ================= NẠP TIỀN =================
 @bot.message_handler(commands=["nap"])
 def cmd_nap(m):
     try:
@@ -156,10 +151,8 @@ def handle_photo(msg):
         file_id=msg.photo[-1].file_id
         with db_lock:
             c.execute("INSERT INTO bills(user_id,file_id,amount,status,created_at) VALUES(?,?,?,?,?)",(uid,file_id,0,"pending",time.ctime()))
-            conn.commit()
             bill_id=c.lastrowid
         bot.reply_to(msg,f"⏳ Hoá đơn đã gửi, chờ admin duyệt. (Bill ID: {bill_id})")
-        # Gửi admin
         for ad in [OWNER_ID]:
             try:
                 kb=types.InlineKeyboardMarkup(row_width=2)
@@ -187,7 +180,6 @@ def cb_handle_bill(call):
                 if r[1]!="pending": return bot.answer_callback_query(call.id,"Bill đã xử lý")
                 user_id=r[0]
                 c.execute("UPDATE bills SET amount=?,status=? WHERE id=?",(amount,"approved",bill_id))
-                conn.commit()
             add_money(user_id,amount)
             bot.send_message(user_id,f"✅ Bill #{bill_id} đã được duyệt. Nhận {amount}đ")
             bot.answer_callback_query(call.id,f"Duyệt & cộng {amount}đ")
@@ -199,7 +191,6 @@ def cb_handle_bill(call):
                 if r[1]!="pending": return bot.answer_callback_query(call.id,"Bill đã xử lý")
                 user_id=r[0]
                 c.execute("UPDATE bills SET status=? WHERE id=?","rejected",bill_id)
-                conn.commit()
             bot.send_message(user_id,f"❌ Bill #{bill_id} bị từ chối")
             bot.answer_callback_query(call.id,"Đã từ chối")
         elif action=="bill_prompt":
@@ -221,14 +212,13 @@ def cmd_setbill(m):
             if r[1]!="pending": return bot.reply_to(m,"Bill đã xử lý")
             user_id=r[0]
             c.execute("UPDATE bills SET amount=?,status=? WHERE id=?",(amount,"approved",bill_id))
-            conn.commit()
         add_money(user_id,amount)
         bot.reply_to(m,f"Đã duyệt bill #{bill_id}, cộng {amount}đ cho {user_id}")
         try: bot.send_message(user_id,f"✅ Bill #{bill_id} đã được duyệt. Nhận {amount}đ")
         except: pass
     except: log_exc("/setbill")
 
-# ================== MINI GAMES ==================
+# ================= MINI GAMES =================
 @bot.message_handler(commands=["dice"])
 def cmd_dice(m):
     try:
@@ -250,7 +240,7 @@ def cmd_slot(m):
             bot.reply_to(m,f"🎰 {' '.join(s)}\n😢 Thua rồi")
     except: log_exc("/slot")
 
-# ================== ADMIN: QUẢN LÝ KHO ==================
+# ================= ADMIN: QUẢN LÝ KHO =================
 @bot.message_handler(commands=["addacc"])
 def cmd_addacc(m):
     if not is_admin(m.from_user.id): return
@@ -258,7 +248,6 @@ def cmd_addacc(m):
     if not data: return bot.reply_to(m,"📌 /addacc email:pass")
     with db_lock:
         c.execute("INSERT INTO stock_acc(acc) VALUES(?)",(data,))
-        conn.commit()
     bot.reply_to(m,"➕ Đã thêm acc vào kho")
 
 @bot.message_handler(commands=["stock"])
@@ -287,7 +276,6 @@ def cmd_delacc(m):
     except: return bot.reply_to(m,"📌 /delacc <id>")
     with db_lock:
         c.execute("DELETE FROM stock_acc WHERE id=?",(aid,))
-        conn.commit()
     bot.reply_to(m,"🗑 Đã xoá acc")
 
 @bot.message_handler(commands=["delall"])
@@ -295,7 +283,6 @@ def cmd_delall(m):
     if not is_admin(m.from_user.id): return
     with db_lock:
         c.execute("DELETE FROM stock_acc")
-        conn.commit()
     bot.reply_to(m,"🔥 Đã xoá toàn bộ kho")
 
 @bot.message_handler(commands=["export"])
@@ -311,13 +298,13 @@ def cmd_export(m):
     try: os.remove(path)
     except: pass
 
-# ================== ADMIN: MONEY & BROADCAST ==================
+# ================= ADMIN: MONEY & BROADCAST =================
 @bot.message_handler(commands=["addmoney"])
 def cmd_addmoney(m):
     if not is_admin(m.from_user.id): return
     try:
         _,uid,amount=m.text.split()
-        uid=uid; amount=int(amount)
+        amount=int(amount)
         add_money(uid,amount)
         bot.reply_to(m,f"Đã cộng {amount}đ cho {uid}")
         try: bot.send_message(int(uid),f"✅ Admin đã cộng {amount}đ")
@@ -338,7 +325,7 @@ def cmd_broadcast(m):
         except: pass
     bot.reply_to(m,f"Đã gửi đến {sent} users")
 
-# ================== DAILY REPORT ==================
+# ================= DAILY REPORT =================
 def daily_report_thread():
     while True:
         try:
@@ -350,12 +337,11 @@ def daily_report_thread():
         time.sleep(DAILY_REPORT_HOUR)
 threading.Thread(target=daily_report_thread,daemon=True).start()
 
-# ================== START BOT ==================
-keep_alive()
+# ================= START BOT =================
 print("BOT STARTED!")
 while True:
     try:
-        bot.infinity_polling(timeout=60,long_polling_timeout=60,skip_pending=True)
+        bot.infinity_polling(timeout=60,long_polling_timeout=60,skip_pending=False)
     except Exception as e:
-        print("⚠ BOT CRASH:",e)
+        print("BOT CRASH:",e)
         time.sleep(5)
