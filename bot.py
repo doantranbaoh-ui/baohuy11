@@ -2,7 +2,7 @@
 import telebot, sqlite3, threading, time, random, string, secrets, traceback
 
 # ================= CONFIG =================
-TOKEN = "6367532329:AAFTX43OlmNc0JpSwOagE8W0P22yOBH0lLU"
+TOKEN = "YOUR_BOT_TOKEN"  # <-- Thay token của bạn
 OWNER_ID = 5736655322
 PRICE_RANDOM = 2000
 DAILY_REPORT_HOUR = 24*60*60
@@ -12,7 +12,7 @@ try:
     from keep_alive import keep_alive
 except:
     def keep_alive():
-        print("keep_alive not found, continuing without it")
+        print("keep_alive not found, continuing...")
 
 bot = telebot.TeleBot(TOKEN, parse_mode="Markdown")
 
@@ -71,7 +71,7 @@ def make_code(n=10):
 @bot.message_handler(commands=["start","help"])
 def cmd_start(m):
     txt = ("🎮 *SHOP ACC RANDOM*\n\n"
-           "/sodu - Số dư\n"
+           "/sodu - Kiểm tra số dư\n"
            "/random - Mua acc random\n"
            "/myacc - Xem acc đã mua\n"
            "/nap <sotien> - Nạp tiền\n"
@@ -110,7 +110,7 @@ def cmd_random(m):
 @bot.message_handler(commands=["nap"])
 def cmd_nap(m):
     parts=m.text.split()
-    if len(parts)<2: return bot.reply_to(m,"📌 /nap <sotien>")
+    if len(parts)<2: return bot.reply_to(m,"📌 Cú pháp: /nap <sotien>")
     amount=int(parts[1])
     txt=f"💳 Hướng dẫn nạp:\nSTK: 0971487462\nNội dung: {m.from_user.id}\nSố tiền: {amount}đ\nGửi ảnh bill vào chat."
     bot.reply_to(m,txt)
@@ -125,9 +125,9 @@ def handle_photo(msg):
 
 @bot.message_handler(commands=["setbill"])
 def cmd_setbill(m):
-    if not is_admin(m.from_user.id): return
+    if not is_admin(m.from_user.id): return bot.reply_to(m,"❌ Bạn không có quyền")
     parts=m.text.split()
-    if len(parts)<3: return bot.reply_to(m,"📌 /setbill <bill_id> <amount>")
+    if len(parts)<3: return bot.reply_to(m,"📌 Cú pháp: /setbill <bill_id> <amount>")
     bill_id=int(parts[1]); amount=int(parts[2])
     with lock:
         c.execute("SELECT user_id,status FROM bills WHERE id=?",(bill_id,))
@@ -143,9 +143,9 @@ def cmd_setbill(m):
 
 @bot.message_handler(commands=["makecode"])
 def cmd_makecode(m):
-    if not is_admin(m.from_user.id): return
+    if not is_admin(m.from_user.id): return bot.reply_to(m,"❌ Bạn không có quyền")
     parts=m.text.split()
-    if len(parts)<3: return bot.reply_to(m,"📌 /makecode <amount> <count>")
+    if len(parts)<3: return bot.reply_to(m,"📌 Cú pháp: /makecode <amount> <count>")
     amount=int(parts[1]); count=int(parts[2])
     codes=[]
     with lock:
@@ -158,7 +158,7 @@ def cmd_makecode(m):
 @bot.message_handler(commands=["redeem"])
 def cmd_redeem(m):
     parts=m.text.split()
-    if len(parts)<2: return bot.reply_to(m,"📌 /redeem <code>")
+    if len(parts)<2: return bot.reply_to(m,"📌 Cú pháp: /redeem <code>")
     code=parts[1].upper()
     with lock: c.execute("SELECT amount,used_by FROM giftcode WHERE code=?",(code,))
     r=c.fetchone()
