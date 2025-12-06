@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 import telebot, sqlite3, threading, time, random, string, secrets, traceback, os
 from telebot import types
-from keep_alive import keep_alive  # <-- import keep_alive
+from keep_alive import keep_alive  # import keep_alive
 
 # ================= CONFIG =================
-TOKEN = "6367532329:AAFTX43OlmNc0JpSwOagE8W0P22yOBH0lLU"  # Thay bằng token mới
+TOKEN = "YOUR_NEW_TOKEN"  # Thay bằng token
 OWNER_ID = 5736655322
 PRICE_RANDOM = 2000
 DAILY_REPORT_HOUR = 24*60*60
@@ -74,7 +74,9 @@ def make_code(n=10):
 def cmd_start(m):
     try:
         ensure_user(str(m.from_user.id))
-        bot.reply_to(m,"🎮 *SHOP ACC RANDOM*\nChào bạn!\n\nSử dụng lệnh:\n/random - Mua acc random\n/myacc - Xem acc đã mua\n/sodu - Xem số dư\n/dice - Mini game dice\n/slot - Mini game slot\n/nap - Nạp tiền\n/buy - Mua acc random",parse_mode="Markdown")
+        bot.reply_to(m,
+        "🎮 *SHOP ACC RANDOM*\nChào bạn!\n\nLệnh chính:\n/buy - Mua acc random\n/myacc - Xem acc đã mua\n/sodu - Xem số dư\n/dice - Mini game dice\n/slot - Mini game slot\n/nap - Nạp tiền\n/redeem <code> - Nhập giftcode",
+        parse_mode="Markdown")
     except: log_exc("/start")
 
 @bot.message_handler(commands=["sodu"])
@@ -95,7 +97,7 @@ def cmd_myacc(m):
         bot.reply_to(m,f"📄 ACC đã mua:\n{text}",parse_mode="Markdown")
     except: log_exc("/myacc")
 
-# ================= RANDOM =================
+# ================= RANDOM / BUY =================
 @bot.message_handler(commands=["buy","random"])
 def cmd_buy(m):
     try:
@@ -134,11 +136,31 @@ def handle_photo(msg):
             c.execute("INSERT INTO bills(user_id,file_id,amount,status,created_at) VALUES(?,?,?,?,?)",(uid,file_id,0,"pending",time.ctime()))
             bill_id=c.lastrowid
         bot.reply_to(msg,f"⏳ Hoá đơn đã gửi, chờ admin duyệt. (Bill ID: {bill_id})")
-        for ad in [OWNER_ID]:
-            try:
-                bot.send_photo(int(ad),file_id,caption=f"Bill #{bill_id} từ {uid}")
-            except: pass
+        # thông báo cho admin
+        try:
+            bot.send_photo(OWNER_ID,file_id,caption=f"Bill #{bill_id} từ {uid}")
+        except: pass
     except: log_exc("photo handler")
+
+@bot.message_handler(commands=["setbill"])
+def cmd_setbill(m):
+    try:
+        if not is_admin(m.from_user.id): return
+        parts=m.text.split()
+        if len(parts)<3: return bot.reply_to(m,"📌 /setbill <bill_id> <amount>")
+        bill_id=int(parts[1]); amount=int(parts[2])
+        with db_lock:
+            c.execute("SELECT user_id,status FROM bills WHERE id=?",(bill_id,))
+            r=c.fetchone()
+            if not r: return bot.reply_to(m,"Bill không tồn tại")
+            if r[1]!="pending": return bot.reply_to(m,"Bill đã xử lý")
+            user_id=r[0]
+            c.execute("UPDATE bills SET amount=?,status=? WHERE id=?",(amount,"approved",bill_id))
+        add_money(user_id,amount)
+        bot.reply_to(m,f"✅ Bill #{bill_id} đã được duyệt, cộng {amount}đ cho {user_id}")
+        try: bot.send_message(user_id,f"✅ Bill #{bill_id} đã được duyệt. Nhận {amount}đ")
+        except: pass
+    except: log_exc("/setbill")
 
 # ================= MINI GAMES =================
 @bot.message_handler(commands=["dice"])
@@ -162,6 +184,25 @@ def cmd_slot(m):
             bot.reply_to(m,f"🎰 {' '.join(s)}\n😢 Thua rồi")
     except: log_exc("/slot")
 
+# ================= GIFT CODE =================
+@bot.message_handler(commands=["redeem"])
+def cmd_redeem(m):
+    try:
+        parts=m.text.split()
+        if len(parts)<2: return bot.reply_to(m,"📌 /redeem <code>")
+        code=parts[1].upper()
+        uid=str(m.from_user.id)
+        with db_lock:
+            c.execute("SELECT amount,used_by FROM giftcode WHERE code=?",(code,))
+            r=c.fetchone()
+            if not r: return bot.reply_to(m,"❌ Giftcode không tồn tại")
+            if r[1]: return bot.reply_to(m,"❌ Giftcode đã được sử dụng")
+            amount=r[0]
+            c.execute("UPDATE giftcode SET used_by=? WHERE code=?",(uid,code))
+        add_money(uid,amount)
+        bot.reply_to(m,f"✅ Nhập giftcode thành công, nhận {amount}đ")
+    except: log_exc("/redeem")
+
 # ================= ADMIN: QUẢN LÝ KHO =================
 @bot.message_handler(commands=["addacc"])
 def cmd_addacc(m):
@@ -180,6 +221,46 @@ def cmd_stock(m):
         cnt=c.fetchone()[0]
     bot.reply_to(m,f"📦 Còn {cnt} ACC trong kho")
 
+@bot.message_handler(commands=["listacc"])
+def cmd_listacc(m):
+    if not is_admin(m.from_user.id): return
+    limit=100
+    with db_lock:
+        c.execute("SELECT id,acc FROM stock_acc LIMIT ?",(limit,))
+        rows=c.fetchall()
+    if not rows: return bot.reply_to(m,"Kho trống")
+    text="\n".join([f"{r[0]}. {r[1]}" for r in rows])
+    bot.reply_to(m,f"📄 Danh sách (max {limit}):\n{text}\n/delacc <id>")
+
+@bot.message_handler(commands=["delacc"])
+def cmd_delacc(m):
+    if not is_admin(m.from_user.id): return
+    try: aid=int(m.text.split()[1])
+    except: return bot.reply_to(m,"📌 /delacc <id>")
+    with db_lock:
+        c.execute("DELETE FROM stock_acc WHERE id=?",(aid,))
+    bot.reply_to(m,"🗑 Đã xoá acc")
+
+@bot.message_handler(commands=["delall"])
+def cmd_delall(m):
+    if not is_admin(m.from_user.id): return
+    with db_lock:
+        c.execute("DELETE FROM stock_acc")
+    bot.reply_to(m,"🔥 Đã xoá toàn bộ kho")
+
+@bot.message_handler(commands=["export"])
+def cmd_export(m):
+    if not is_admin(m.from_user.id): return
+    with db_lock:
+        c.execute("SELECT acc FROM stock_acc")
+        rows=c.fetchall()
+    path="stock_export.txt"
+    with open(path,"w",encoding="utf-8") as f:
+        for r in rows: f.write(r[0]+"\n")
+    bot.send_document(m.chat.id,open(path,"rb"))
+    try: os.remove(path)
+    except: pass
+
 # ================= ADMIN: MONEY & BROADCAST =================
 @bot.message_handler(commands=["addmoney"])
 def cmd_addmoney(m):
@@ -188,10 +269,24 @@ def cmd_addmoney(m):
         _,uid,amount=m.text.split()
         amount=int(amount)
         add_money(uid,amount)
-        bot.reply_to(m,f"Đã cộng {amount}đ cho {uid}")
+        bot.reply_to(m,f"✅ Đã cộng {amount}đ cho {uid}")
         try: bot.send_message(int(uid),f"✅ Admin đã cộng {amount}đ")
         except: pass
     except: log_exc("/addmoney")
+
+@bot.message_handler(commands=["broadcast"])
+def cmd_broadcast(m):
+    if not is_admin(m.from_user.id): return
+    text=m.text.replace("/broadcast","").strip()
+    if not text: return bot.reply_to(m,"📌 /broadcast <message>")
+    with db_lock:
+        c.execute("SELECT user_id FROM users")
+        users=c.fetchall()
+    sent=0
+    for u in users:
+        try: bot.send_message(int(u[0]),text); sent+=1
+        except: pass
+    bot.reply_to(m,f"✅ Đã gửi đến {sent} users")
 
 # ================= DAILY REPORT =================
 def daily_report_thread():
@@ -206,7 +301,7 @@ def daily_report_thread():
 threading.Thread(target=daily_report_thread,daemon=True).start()
 
 # ================= START BOT =================
-keep_alive()  # <-- chạy keep_alive.py
+keep_alive()  # chạy keep_alive.py
 print("BOT STARTED!")
 while True:
     try:
