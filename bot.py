@@ -3,7 +3,7 @@ import telebot, sqlite3, threading, time, random, string, secrets, traceback, os
 from keep_alive import keep_alive
 
 # ================= CONFIG =================
-TOKEN = "YOUR_NEW_TOKEN"  # Thay bằng token của bạn
+TOKEN = "6367532329:AAFTX43OlmNc0JpSwOagE8W0P22yOBH0lLU"  # Thay bằng token của bạn
 OWNER_ID = 5736655322
 PRICE_RANDOM = 2000
 DAILY_REPORT_HOUR = 24*60*60  # 24h
