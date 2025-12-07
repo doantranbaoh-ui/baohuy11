@@ -1,120 +1,232 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
 import telebot
 from telebot import types
+import sqlite3
+import random
+import os
+from keep_alive import keep_alive  # import file keep_alive.py
 
-from database import Database
-from admin import register_admin_handlers
-from shop import register_shop_handlers
-from giftcode import register_giftcode_handlers
-from history import register_history_handlers
-from keep_alive import keep_alive
-
-# ================= CONFIG =================
+# ==========================
+# CẤU HÌNH
+# ==========================
 TOKEN = "6367532329:AAE7uL4iMtoRBkM-Y8GIHOYDD-04XBzaAWM"
-OWNER_ID = 5736655322
+ADMIN_ID = 5736655322  # sửa thành ID admin của bạn
+PRICE_RANDOM_ACC = 20000  # giá mỗi lượt random acc
+ACC_FILE = "accs.txt"
+bot = telebot.TeleBot(TOKEN, parse_mode="Markdown")
 
-# ================= INIT ===================
-bot = telebot.TeleBot(TOKEN)
-db = Database("data.db")
+# ==========================
+# DATABASE SỐ DƯ
+# ==========================
+def init_db():
+    conn = sqlite3.connect("balance.db")
+    c = conn.cursor()
+    c.execute("""CREATE TABLE IF NOT EXISTS users (
+        user_id INTEGER PRIMARY KEY,
+        balance INTEGER DEFAULT 0
+    )""")
+    conn.commit()
+    conn.close()
 
-# Load module handlers
-admin = register_admin_handlers(bot, db, OWNER_ID)
-shop = register_shop_handlers(bot, db)
-giftcode = register_giftcode_handlers(bot, db)
-history = register_history_handlers(bot, db)
+init_db()
 
+def get_balance(user_id):
+    conn = sqlite3.connect("balance.db")
+    c = conn.cursor()
+    c.execute("SELECT balance FROM users WHERE user_id=?", (user_id,))
+    row = c.fetchone()
+    conn.close()
+    return row[0] if row else 0
 
-# ================= MAIN MENU ==============
-def main_menu():
-    kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("🎮 Mua Acc", callback_data="shop"))
-    kb.add(
-        types.InlineKeyboardButton("💳 Nạp Tiền", callback_data="nap"),
-        types.InlineKeyboardButton("🎁 Giftcode", callback_data="gift"),
-    )
-    kb.add(types.InlineKeyboardButton("🧾 Lịch Sử", callback_data="history"))
-    return kb
+def add_balance(user_id, amount):
+    conn = sqlite3.connect("balance.db")
+    c = conn.cursor()
+    c.execute("INSERT OR IGNORE INTO users(user_id,balance) VALUES(?,0)", (user_id,))
+    c.execute("UPDATE users SET balance = balance + ? WHERE user_id=?", (amount, user_id))
+    conn.commit()
+    conn.close()
 
+def remove_balance(user_id, amount):
+    bal = get_balance(user_id)
+    if bal < amount:
+        return False
+    add_balance(user_id, -amount)
+    return True
 
-# ================= ADMIN MENU =============
-def admin_menu():
-    kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("📥 Thêm Acc", callback_data="admin_addacc"))
-    kb.add(types.InlineKeyboardButton("📋 List Acc", callback_data="admin_listacc"))
-    kb.add(types.InlineKeyboardButton("❌ Xóa Acc", callback_data="admin_delacc"))
-    kb.add(types.InlineKeyboardButton("🎁 Giftcode", callback_data="admin_giftcode"))
-    return kb
+# ==========================
+# RANDOM ACC
+# ==========================
+def random_acc_from_file():
+    if not os.path.exists(ACC_FILE):
+        return None
+    with open(ACC_FILE, "r", encoding="utf-8") as f:
+        accs = [line.strip() for line in f if line.strip()]
+    if not accs:
+        return None
+    acc = random.choice(accs)
+    accs.remove(acc)
+    with open(ACC_FILE, "w", encoding="utf-8") as f:
+        for a in accs:
+            f.write(a + "\n")
+    return acc
 
+# ==========================
+# HƯỚNG DẪN
+# ==========================
+HELP_TEXT = """
+📘 *HƯỚNG DẪN SỬ DỤNG BOT*
 
-# ================== /START =================
+🛒 /randomacc - Random ACC Liên Quân mất tiền mỗi lượt  
+💳 /nap - Nạp tiền qua STK MB  
+💰 /balance - Xem số dư hiện tại
+"""
+
+# ==========================
+# START + MENU
+# ==========================
 @bot.message_handler(commands=["start"])
-def start_cmd(msg):
-    uid = msg.from_user.id
-    db.add_user(uid)
-    bot.send_message(
-        msg.chat.id,
-        f"🤖 Xin chào *{msg.from_user.first_name}*!\n"
-        f"Chào mừng đến shop bán Acc Liên Quân.",
-        reply_markup=main_menu(),
-        parse_mode="Markdown"
-    )
+def start_cmd(message):
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.row("🎲 Random ACC", "💳 Nạp tiền")
+    kb.row("💰 Số dư", "ℹ️ Hướng dẫn")
+    bot.send_message(message.chat.id,
+                     "Xin chào! 👋 Chọn thao tác bên dưới:",
+                     reply_markup=kb)
 
+# ==========================
+# HELP
+# ==========================
+@bot.message_handler(commands=["help"])
+def help_cmd(message):
+    bot.send_message(message.chat.id, HELP_TEXT)
 
-# ================== /ADMIN =================
-@bot.message_handler(commands=["admin"])
-def admin_cmd(msg):
-    if msg.from_user.id != OWNER_ID:
-        return bot.reply_to(msg, "❌ Bạn không phải admin!")
-    bot.send_message(msg.chat.id, "🔧 MENU ADMIN", reply_markup=admin_menu())
+@bot.message_handler(func=lambda m: m.text == "ℹ️ Hướng dẫn")
+def help_button(message):
+    bot.send_message(message.chat.id, HELP_TEXT)
 
+# ==========================
+# BALANCE
+# ==========================
+@bot.message_handler(commands=["balance"])
+@bot.message_handler(func=lambda m: m.text == "💰 Số dư")
+def balance_cmd(message):
+    bal = get_balance(message.from_user.id)
+    bot.send_message(message.chat.id, f"💰 Số dư hiện tại: {bal}đ")
 
-# =============== CALLBACK ==================
-@bot.callback_query_handler(func=lambda call: True)
-def callback(call):
-    cid = call.message.chat.id
-    data = call.data
+# ==========================
+# NẠP TIỀN
+# ==========================
+pending_payments = {}  # user_id -> (file_id, amount)
 
-    # ----- SHOP -----
-    if data == "shop":
-        shop.open_shop(call)
+@bot.message_handler(commands=["nap"])
+@bot.message_handler(func=lambda m: m.text == "💳 Nạp tiền")
+def nap_cmd(message):
+    text = f"""
+💳 *Hướng dẫn nạp tiền:*
+
+• STK: `0971487462`  
+• Ngân hàng: MB  
+• Nội dung: `NAP-{message.from_user.id}`  
+• Ghi rõ số tiền bạn nạp (VD: 10000, 50000,...)
+
+📸 Gửi *ảnh bill* vào chat để admin duyệt.
+"""
+    bot.send_message(message.chat.id, text)
+
+# ==========================
+# NHẬN ẢNH BILL
+# ==========================
+@bot.message_handler(content_types=['photo'])
+def handle_photo(message):
+    user_id = message.from_user.id
+    if message.caption:
+        try:
+            amount = int(message.caption.strip())
+            pending_payments[user_id] = (message.photo[-1].file_id, amount)
+            markup = types.InlineKeyboardMarkup()
+            markup.add(
+                types.InlineKeyboardButton("✅ Duyệt", callback_data=f"approve_{user_id}"),
+                types.InlineKeyboardButton("❌ Từ chối", callback_data=f"reject_{user_id}")
+            )
+            bot.send_message(ADMIN_ID,
+                             f"📸 Bill từ {user_id}\nSố tiền: {amount}đ",
+                             reply_markup=markup)
+            bot.send_message(user_id, "✅ Ảnh bill đã gửi cho admin duyệt.")
+        except:
+            bot.send_message(user_id, "❌ Gửi caption là số tiền nạp (ví dụ 10000).")
+    else:
+        bot.send_message(user_id, "❌ Vui lòng gửi số tiền nạp trong caption ảnh.")
+
+# ==========================
+# RANDOM ACC mất tiền
+# ==========================
+@bot.message_handler(commands=["randomacc"])
+@bot.message_handler(func=lambda m: m.text == "🎲 Random ACC")
+def randomacc_cmd(message):
+    user_id = message.from_user.id
+    bal = get_balance(user_id)
+    if bal < PRICE_RANDOM_ACC:
+        return bot.send_message(user_id,
+                                f"❌ Bạn không đủ tiền để random!\n"
+                                f"💰 Số dư hiện tại: {bal}đ\n"
+                                f"💴 Giá mỗi lượt: {PRICE_RANDOM_ACC}đ\n"
+                                f"👉 Hãy /nap để nạp tiền.")
+
+    success = remove_balance(user_id, PRICE_RANDOM_ACC)
+    if not success:
+        return bot.send_message(user_id, "❌ Lỗi trừ tiền. Thử lại sau.")
+
+    acc = random_acc_from_file()
+    if acc is None:
+        add_balance(user_id, PRICE_RANDOM_ACC)
+        return bot.send_message(user_id, "❌ Kho acc đã hết. Đã hoàn lại tiền.")
+
+    bot.send_message(user_id,
+                     f"🎉 *Random thành công!*\n\n"
+                     f"🔑 ACC của bạn:\n`{acc}`\n\n"
+                     f"💸 Đã trừ: {PRICE_RANDOM_ACC}đ\n"
+                     f"💰 Số dư còn lại: {get_balance(user_id)}đ")
+
+# ==========================
+# ADMIN DUYỆT BILL
+# ==========================
+@bot.callback_query_handler(func=lambda call: call.data.startswith(("approve_", "reject_")))
+def admin_approve(call):
+    user_id = int(call.data.split("_")[1])
+    if call.from_user.id != ADMIN_ID:
         return
+    if call.data.startswith("approve_"):
+        if user_id in pending_payments:
+            _, amount = pending_payments.pop(user_id)
+            add_balance(user_id, amount)
+            bot.send_message(user_id, f"✅ Admin đã duyệt. Số dư cộng {amount}đ.")
+            bot.edit_message_text("✅ Đã duyệt thanh toán", call.message.chat.id, call.message.message_id)
+    elif call.data.startswith("reject_"):
+        if user_id in pending_payments:
+            pending_payments.pop(user_id)
+            bot.send_message(user_id, f"❌ Thanh toán bị từ chối. Vui lòng thử lại.")
+            bot.edit_message_text("❌ Đã từ chối thanh toán", call.message.chat.id, call.message.message_id)
 
-    # ----- NẠP TIỀN -----
-    if data == "nap":
-        bot.answer_callback_query(call.id)
-        bot.send_message(
-            cid,
-            "💳 *Hướng dẫn nạp tiền*\n"
-            "• STK: 0971487462\n"
-            "• Ngân hàng: MB Bank\n"
-            "• Nội dung: 5736655322\n"
-            "• Số tiền: 10.000đ\n\n"
-            "📸 Gửi ảnh bill vào đây để admin duyệt.",
-            parse_mode="Markdown"
-        )
-        return
+# ==========================
+# ADMIN THÊM ACC
+# ==========================
+@bot.message_handler(commands=["addacc"])
+def addacc_cmd(message):
+    if message.from_user.id != ADMIN_ID:
+        return bot.send_message(message.chat.id, "⛔ Bạn không có quyền dùng lệnh này!")
+    try:
+        acc = message.text.split(" ", 1)[1].strip()
+    except:
+        return bot.send_message(message.chat.id, "❗ Dùng cú pháp: /addacc account|password")
+    with open(ACC_FILE, "a", encoding="utf-8") as f:
+        f.write(acc + "\n")
+    bot.send_message(message.chat.id, f"✅ Đã thêm ACC:\n`{acc}`")
 
-    # ----- GIFTCODE -----
-    if data == "gift":
-        giftcode.open_giftcode(call)
-        return
-
-    # ----- HISTORY -----
-    if data == "history":
-        history.open_history(call)
-        return
-
-    # ============= ADMIN CALLBACK ============
-    if data.startswith("admin_"):
-        if call.from_user.id != OWNER_ID:
-            return bot.answer_callback_query(call.id, "Không phải admin!")
-        # callback xử lý nằm trong admin.py
-        return
-
-
-# ============= KEEP ALIVE ==================
-keep_alive()
-
-# ============= RUN BOT =====================
-print("Bot is running...")
+# ==========================
+# CHẠY BOT VỚI KEEP_ALIVE
+# ==========================
+keep_alive()  # chạy web server để bot không bị tắt (dùng render hoặc replit)
+print("Bot đang chạy...")
 bot.infinity_polling()
