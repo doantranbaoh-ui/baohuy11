@@ -3,7 +3,7 @@ import telebot
 from telebot import types
 
 # ================= CONFIG =================
-TOKEN = "YOUR_BOT_TOKEN_HERE"
+TOKEN = "6367532329:AAE7uL4iMtoRBkM-Y8GIHOYDD-04XBzaAWM"
 OWNER_ID = 5736655322
 
 # =============== IMPORT MODULE ===============
