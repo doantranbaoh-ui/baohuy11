@@ -12,4 +12,3 @@ itsdangerous
 click
 Jinja2
 MarkupSafe
-history
