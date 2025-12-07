@@ -6,15 +6,24 @@ from telebot import types
 import sqlite3
 import random
 import os
-from keep_alive import keep_alive  # import file keep_alive.py
+from keep_alive import keep_alive
+import logging
 
 # ==========================
 # CẤU HÌNH
 # ==========================
-TOKEN = "6367532329:AAE7uL4iMtoRBkM-Y8GIHOYDD-04XBzaAWM"
-ADMIN_ID = 5736655322  # sửa thành ID admin của bạn
-PRICE_RANDOM_ACC = 20000  # giá mỗi lượt random acc
+TOKEN = "6367532329:AAEyb8Uyot8Zj-wBbAyy-ZjJpt4JIeIKGvY"  # Thay bằng token của bạn
+ADMIN_ID = 5736655322  # ID admin
+PRICE_RANDOM_ACC = 2000  # Giá mỗi lượt random
 ACC_FILE = "accs.txt"
+
+# ==========================
+# LOG DEBUG
+# ==========================
+logging.basicConfig(level=logging.DEBUG)
+telebot.logger.setLevel(logging.DEBUG)
+
+# ==========================
 bot = telebot.TeleBot(TOKEN, parse_mode="Markdown")
 
 # ==========================
@@ -78,7 +87,7 @@ def random_acc_from_file():
 HELP_TEXT = """
 📘 *HƯỚNG DẪN SỬ DỤNG BOT*
 
-🛒 /randomacc - Random ACC Liên Quân mất tiền mỗi lượt  
+🎲 /randomacc - Random ACC Liên Quân mất tiền mỗi lượt  
 💳 /nap - Nạp tiền qua STK MB  
 💰 /balance - Xem số dư hiện tại
 """
@@ -227,6 +236,9 @@ def addacc_cmd(message):
 # ==========================
 # CHẠY BOT VỚI KEEP_ALIVE
 # ==========================
-keep_alive()  # chạy web server để bot không bị tắt (dùng render hoặc replit)
+keep_alive()  # web server giữ bot sống
 print("Bot đang chạy...")
-bot.infinity_polling()
+try:
+    bot.infinity_polling(timeout=10, long_polling_timeout=5)
+except Exception as e:
+    logging.exception("Bot gặp lỗi, khởi động lại...")
