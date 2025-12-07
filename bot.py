@@ -4,10 +4,11 @@ from telebot import types
 from keep_alive import keep_alive
 
 # ================= CONFIG =================
-TOKEN = "6367532329:AAFTX43OlmNc0JpSwOagE8W0P22yOBH0lLU"
+TOKEN = "6367532329:AAFTX43OlmNc0JpSwOagE8W0P22yOBH0lLU"  # Thay token thật ở đây
 OWNER_ID = 5736655322
 PRICE_RANDOM = 2000
 DAILY_REPORT_HOUR = 24*60*60
+
 bot = telebot.TeleBot(TOKEN, parse_mode="Markdown")
 
 # ================= DATABASE =================
@@ -25,8 +26,8 @@ def init_db():
             c.execute("""CREATE TABLE IF NOT EXISTS giftcode(code TEXT PRIMARY KEY,amount INTEGER,used_by TEXT)""")
             c.execute("""CREATE TABLE IF NOT EXISTS admins(user_id TEXT PRIMARY KEY,level INTEGER DEFAULT 3)""")
             c.execute("INSERT OR IGNORE INTO admins(user_id,level) VALUES (?,?)",(str(OWNER_ID),3))
-    except Exception as e:
-        print("INIT DB ERROR:", e)
+    except Exception:
+        traceback.print_exc()
 init_db()
 
 # ================= UTILS =================
