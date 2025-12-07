@@ -7,3 +7,9 @@ pyTelegramBotAPI
 fastapi
 uvicorn
 gunicorn
+Werkzeug
+itsdangerous
+click
+Jinja2
+MarkupSafe
+history
