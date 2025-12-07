@@ -1,88 +1,83 @@
-# admin.py
 from telebot import types
+from database import add_acc, delete_acc, list_acc
+from history import log_history
 
-def register_admin(bot, db, OWNER_ID):
-    @bot.message_handler(commands=["addacc"])
-    def _addacc(m):
-        if m.from_user.id != OWNER_ID:
-            return bot.reply_to(m, "❌ Bạn không có quyền.")
-        # cú pháp: /addacc GAME|Title|Info|price
-        text = m.text.partition(" ")[2].strip()
-        if not text:
-            return bot.reply_to(m, "Cú pháp:\n/addacc GAME|Title|Info|price")
-        parts = [p.strip() for p in text.split("|")]
-        if len(parts) < 4:
-            return bot.reply_to(m, "Sai định dạng. VD: /addacc LQ|Acc xịn|email...|15000")
+OWNER_ID = 5736655322
+
+def register_admin_handlers(bot):
+
+    @bot.message_handler(commands=['admin'])
+    def admin_cmd(message):
+        if message.from_user.id != OWNER_ID:
+            return bot.reply_to(message, "⛔ Bạn không phải admin!")
+
+        send_admin_menu(bot, message)
+
+    @bot.message_handler(commands=['addacc'])
+    def addacc_cmd(message):
+        if message.from_user.id != OWNER_ID:
+            return
+
+        msg = bot.reply_to(message,
+            "📌 Nhập thông tin acc theo dạng:\n\n"
+            "`game | info | price`",
+            parse_mode="Markdown"
+        )
+        bot.register_next_step_handler(msg, process_addacc)
+
+    def process_addacc(message):
         try:
-            game, title, info, price = parts[0], parts[1], parts[2], int(parts[3])
+            game, info, price = message.text.split("|")
+            game = game.strip()
+            info = info.strip()
+            price = int(price.strip())
+
+            add_acc(game, info, price)
+            log_history(message.from_user.id, "Thêm acc", price, f"{game}")
+
+            bot.reply_to(message, "✅ Đã thêm acc thành công!")
+
         except:
-            return bot.reply_to(m, "Giá phải là số nguyên.")
-        aid = db.add_account(game, title, info, price)
-        bot.reply_to(m, f"✅ Đã thêm acc ID {aid} | {game} | {price}đ")
+            bot.reply_to(message, "❌ Sai định dạng! Hãy nhập:\n`game | info | price`")
 
-    @bot.message_handler(commands=["listacc"])
-    def _listacc(m):
-        if m.from_user.id != OWNER_ID:
-            return bot.reply_to(m, "❌ Bạn không có quyền.")
-        rows = db.list_accounts(only_available=False)
-        if not rows:
-            return bot.reply_to(m, "📭 Kho trống.")
-        text = "📋 DANH SÁCH ACC:\n\n"
-        for r in rows:
-            sid, game, title, info, price, sold = r
-            text += f"ID:{sid} | {game} | {title} | {price}đ | {'SOLD' if sold else 'AVAIL'}\n"
-        bot.reply_to(m, text)
+    @bot.message_handler(commands=['delacc'])
+    def delacc_cmd(message):
+        if message.from_user.id != OWNER_ID:
+            return
 
-    @bot.message_handler(commands=["delacc"])
-    def _delacc(m):
-        if m.from_user.id != OWNER_ID:
-            return bot.reply_to(m, "❌ Bạn không có quyền.")
+        msg = bot.reply_to(message, "📌 Nhập ID acc muốn xóa:")
+        bot.register_next_step_handler(msg, process_del)
+
+    def process_del(message):
         try:
-            aid = int(m.text.split()[1])
+            acc_id = int(message.text)
+            delete_acc(acc_id)
+            log_history(message.from_user.id, "Xóa acc", 0, f"ID {acc_id}")
+
+            bot.reply_to(message, "🗑️ Đã xóa acc!")
         except:
-            return bot.reply_to(m, "Dùng: /delacc ID")
-        db.delete_account(aid)
-        bot.reply_to(m, f"✅ Đã xóa acc ID {aid}")
+            bot.reply_to(message, "❌ ID không hợp lệ!")
 
-    @bot.message_handler(commands=["creategift"])
-    def _creategift(m):
-        if m.from_user.id != OWNER_ID:
-            return bot.reply_to(m, "❌ Bạn không có quyền.")
-        parts = m.text.split()
-        if len(parts) < 3:
-            return bot.reply_to(m, "Dùng: /creategift CODE VALUE [USES]")
-        code = parts[1].upper()
-        try:
-            val = int(parts[2])
-            uses = int(parts[3]) if len(parts) >= 4 else 1
-        except:
-            return bot.reply_to(m, "Giá trị phải là số.")
-        db.create_giftcode(code, val, uses)
-        bot.reply_to(m, f"🎁 Tạo giftcode {code} +{val}đ x{uses}")
+    @bot.message_handler(commands=['listacc'])
+    def listacc_cmd(message):
+        if message.from_user.id != OWNER_ID:
+            return
 
-    @bot.message_handler(commands=["broadcast"])
-    def _broadcast(m):
-        if m.from_user.id != OWNER_ID:
-            return bot.reply_to(m, "❌ Bạn không có quyền.")
-        text = m.text.partition(" ")[2].strip()
-        if not text:
-            return bot.reply_to(m, "Dùng: /broadcast NỘI_DUNG")
-        users = db._cur.execute("SELECT user_id FROM users").fetchall()
-        sent = 0
-        for u in users:
-            try:
-                bot.send_message(u[0], f"📣 Broadcast:\n\n{text}")
-                sent += 1
-            except:
-                pass
-        bot.reply_to(m, f"Đã gửi tới {sent} người.")
+        data = list_acc()
+        if not data:
+            return bot.reply_to(message, "📭 Không có acc nào!")
 
-    @bot.message_handler(commands=["admin_history"])
-    def _admin_history(m):
-        if m.from_user.id != OWNER_ID:
-            return bot.reply_to(m, "❌ Bạn không có quyền.")
-        rows = db._cur.execute("SELECT id,user_id,type,detail,amount,ts FROM history ORDER BY id DESC LIMIT 200").fetchall()
-        text = "📜 Lịch sử (200 gần nhất):\n\n"
-        for r in rows:
-            text += f"{r}\n"
-        bot.reply_to(m, text)
+        text = "📋 *Danh sách acc chưa bán:*\n\n"
+        for acc in data:
+            text += f"🔹 ID: {acc[0]} — {acc[1]} — {acc[2]}đ\n"
+
+        bot.reply_to(message, text, parse_mode="Markdown")
+
+def send_admin_menu(bot, message):
+    markup = types.InlineKeyboardMarkup()
+    markup.add(
+        types.InlineKeyboardButton("➕ Thêm acc", callback_data="admin_addacc"),
+        types.InlineKeyboardButton("🗑 Xóa acc", callback_data="admin_delacc")
+    )
+    markup.add(types.InlineKeyboardButton("📋 Danh sách acc", callback_data="admin_listacc"))
+    bot.reply_to(message, "👑 *Admin Menu*", parse_mode="Markdown", reply_markup=markup)
