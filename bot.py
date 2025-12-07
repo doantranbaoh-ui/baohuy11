@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 import telebot, sqlite3, threading, time, random, string, secrets, traceback, os
 from telebot import types
+from keep_alive import keep_alive
 
 # ================= KEEP ALIVE =================
-from keep_alive import keep_alive
 keep_alive()
 
 # ================= CONFIG =================
-TOKEN = "6367532329:AAE7uL4iMtoRBkM-Y8GIHOYDD-04XBzaAWM"  # Thay bằng token mới
+TOKEN = "6367532329:AAE7uL4iMtoRBkM-Y8GIHOYDD-04XBzaAWM"  # <-- Thay token ở đây
 OWNER_ID = 5736655322
 PRICE_RANDOM = 2000
 DAILY_REPORT_HOUR = 24*60*60
@@ -36,7 +36,7 @@ def log_exc(tag="ERR"):
     traceback.print_exc()
     print("-----------")
 
-def ensure_user(uid): 
+def ensure_user(uid):
     with db_lock:
         c.execute("INSERT OR IGNORE INTO users(user_id) VALUES(?)",(uid,))
 
@@ -69,24 +69,42 @@ def is_owner(uid): return get_role(uid)==3
 def is_admin(uid): return get_role(uid)>=2
 def is_support(uid): return get_role(uid)>=1
 
-def send_main_menu(chat_id):
-    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    kb.row("🛍 Mua Random","📦 Acc đã mua")
-    kb.row("💰 Số dư","🎲 Dice")
-    kb.row("🎰 Slot","🎁 Redeem")
-    bot.send_message(chat_id,"Chọn chức năng:",reply_markup=kb)
-
 def make_code(n=10):
     return ''.join(secrets.choice(string.ascii_uppercase+string.digits) for _ in range(n))
 
-# ================= HANDLER =================
+# ================= INLINE MENUS (user + admin) =================
+def user_main_inline(admin=False):
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        types.InlineKeyboardButton("🔥 Mua Random", callback_data="menu_buy"),
+        types.InlineKeyboardButton("💰 Số dư", callback_data="menu_balance"),
+        types.InlineKeyboardButton("💳 Nạp tiền", callback_data="menu_nap"),
+        types.InlineKeyboardButton("🎲 Dice", callback_data="menu_dice"),
+        types.InlineKeyboardButton("🎰 Slot", callback_data="menu_slot"),
+        types.InlineKeyboardButton("🎁 Redeem", callback_data="menu_redeem"),
+        types.InlineKeyboardButton("📦 Acc đã mua", callback_data="menu_myacc")
+    )
+    if admin:
+        kb.add(
+            types.InlineKeyboardButton("➕ Thêm acc", callback_data="admin_addacc"),
+            types.InlineKeyboardButton("📦 Kho", callback_data="admin_stock"),
+            types.InlineKeyboardButton("💰 Cộng tiền", callback_data="admin_addmoney"),
+            types.InlineKeyboardButton("📢 Broadcast", callback_data="admin_broadcast"),
+            types.InlineKeyboardButton("🗑 Xoá acc", callback_data="admin_delacc")
+        )
+    return kb
+
+# ================= HANDLERS =================
 @bot.message_handler(commands=["start","help"])
 def cmd_start(m):
     try:
-        ensure_user(str(m.from_user.id))
+        uid_str = str(m.from_user.id)
+        ensure_user(uid_str)
+        adm = is_admin(m.from_user.id)
         bot.reply_to(m,"🎮 *SHOP ACC RANDOM*\nChào bạn!",parse_mode="Markdown")
-        send_main_menu(m.chat.id)
-    except: log_exc("/start")
+        bot.send_message(m.chat.id,"Chọn chức năng bên dưới:", reply_markup=user_main_inline(admin=adm))
+    except:
+        log_exc("/start")
 
 @bot.message_handler(commands=["sodu"])
 def cmd_sodu(m):
@@ -106,7 +124,7 @@ def cmd_myacc(m):
         bot.reply_to(m,f"📄 ACC đã mua:\n{text}",parse_mode="Markdown")
     except: log_exc("/myacc")
 
-# ================= RANDOM =================
+# ================= RANDOM (command & inline) =================
 @bot.message_handler(commands=["random"])
 def cmd_random(m):
     try:
@@ -115,29 +133,75 @@ def cmd_random(m):
         bot.send_message(m.chat.id,"Bạn muốn mua 1 ACC random?",reply_markup=kb)
     except: log_exc("/random")
 
-@bot.callback_query_handler(func=lambda c:c.data=="buy_confirm")
-def cb_buy_confirm(call):
+@bot.callback_query_handler(func=lambda c: c.data in [
+    "menu_buy","menu_balance","menu_nap","menu_dice","menu_slot","menu_redeem","menu_myacc","buy_confirm"
+])
+def cb_menu_actions(call):
     try:
-        uid=str(call.from_user.id)
-        if not deduct(uid,PRICE_RANDOM):
-            return bot.answer_callback_query(call.id,"❌ Không đủ tiền",show_alert=True)
-        with db_lock:
-            c.execute("SELECT id,acc FROM stock_acc ORDER BY RANDOM() LIMIT 1")
-            row=c.fetchone()
-            if not row:
-                add_money(uid,PRICE_RANDOM)
-                return bot.answer_callback_query(call.id,"⚠ Hết hàng, tiền đã hoàn lại",show_alert=True)
-            acc_id,acc_val=row
-            c.execute("DELETE FROM stock_acc WHERE id=?",(acc_id,))
-            c.execute("INSERT INTO purchases(user_id,acc,time) VALUES(?,?,?)",(uid,acc_val,time.ctime()))
-        bot.send_message(uid,f"🛍 Bạn nhận được ACC:\n`{acc_val}`",parse_mode="Markdown")
-        bot.answer_callback_query(call.id,"Giao dịch thành công")
-    except:
-        log_exc("cb_buy_confirm")
-        add_money(str(call.from_user.id),PRICE_RANDOM)
-        bot.answer_callback_query(call.id,"Có lỗi, tiền đã hoàn lại",show_alert=True)
+        data = call.data
+        uid = str(call.from_user.id)
+        # ---------- buy flow ----------
+        if data == "menu_buy":
+            kb=types.InlineKeyboardMarkup()
+            kb.add(types.InlineKeyboardButton(f"Mua ngay ({PRICE_RANDOM}đ)",callback_data="buy_confirm"))
+            bot.edit_message_text("Bạn muốn mua 1 ACC random?", chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=kb)
+            bot.answer_callback_query(call.id)
+            return
 
-# ================= NẠP TIỀN =================
+        if data == "buy_confirm":
+            if not deduct(uid,PRICE_RANDOM):
+                return bot.answer_callback_query(call.id,"❌ Không đủ tiền",show_alert=True)
+            with db_lock:
+                c.execute("SELECT id,acc FROM stock_acc ORDER BY RANDOM() LIMIT 1")
+                row=c.fetchone()
+                if not row:
+                    add_money(uid,PRICE_RANDOM)
+                    return bot.answer_callback_query(call.id,"⚠ Hết hàng, tiền đã hoàn lại",show_alert=True)
+                acc_id,acc_val=row
+                c.execute("DELETE FROM stock_acc WHERE id=?",(acc_id,))
+                c.execute("INSERT INTO purchases(user_id,acc,time) VALUES(?,?,?)",(uid,acc_val,time.ctime()))
+            try: bot.send_message(uid,f"🛍 Bạn nhận được ACC:\n`{acc_val}`",parse_mode="Markdown")
+            except: pass
+            bot.answer_callback_query(call.id,"Giao dịch thành công")
+            return
+
+        # ---------- other menu actions ----------
+        if data == "menu_balance":
+            bot.answer_callback_query(call.id)
+            bot.send_message(call.from_user.id,f"💰 Số dư: *{get_balance(uid)}đ*",parse_mode="Markdown")
+        elif data == "menu_nap":
+            bot.answer_callback_query(call.id)
+            bot.send_message(call.from_user.id,"📌 Hướng dẫn nạp tiền:\nGửi /nap <số tiền> rồi upload ảnh bill vào chat để admin duyệt.")
+        elif data == "menu_dice":
+            bot.answer_callback_query(call.id)
+            roll=random.randint(1,6); reward=roll*200
+            add_money(uid,reward)
+            bot.send_message(call.from_user.id,f"🎲 Lắc ra *{roll}* → +{reward}đ",parse_mode="Markdown")
+        elif data == "menu_slot":
+            bot.answer_callback_query(call.id)
+            icons=['🍒','💎','⭐','7️⃣']; s=[random.choice(icons) for _ in range(3)]
+            if s.count(s[0])==3:
+                add_money(uid,10000)
+                bot.send_message(call.from_user.id,f"🎰 {' '.join(s)}\n🔥 JACKPOT +10000đ")
+            else:
+                bot.send_message(call.from_user.id,f"🎰 {' '.join(s)}\n😢 Thua rồi")
+        elif data == "menu_redeem":
+            bot.answer_callback_query(call.id)
+            bot.send_message(call.from_user.id,"📌 Dùng lệnh: /redeem <giftcode>")
+        elif data == "menu_myacc":
+            bot.answer_callback_query(call.id)
+            with db_lock:
+                c.execute("SELECT acc,time FROM purchases WHERE user_id=?",(uid,))
+                rows=c.fetchall()
+            if not rows:
+                bot.send_message(call.from_user.id,"📭 Bạn chưa mua acc nào.")
+            else:
+                text="\n".join([f"• `{r[0]}` | {r[1]}" for r in rows])
+                bot.send_message(call.from_user.id,f"📄 ACC đã mua:\n{text}",parse_mode="Markdown")
+    except:
+        log_exc("cb_menu_actions")
+
+# ================= BILL / NẠP TIỀN =================
 @bot.message_handler(commands=["nap"])
 def cmd_nap(m):
     try:
@@ -168,7 +232,7 @@ def handle_photo(msg):
             except: pass
     except: log_exc("photo handler")
 
-@bot.callback_query_handler(func=lambda c:c.data.startswith("bill_"))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("bill_"))
 def cb_handle_bill(call):
     try:
         parts=call.data.split(":")
@@ -194,7 +258,7 @@ def cb_handle_bill(call):
                 if not r: return bot.answer_callback_query(call.id,"Bill không tồn tại")
                 if r[1]!="pending": return bot.answer_callback_query(call.id,"Bill đã xử lý")
                 user_id=r[0]
-                c.execute("UPDATE bills SET status=? WHERE id=?","rejected",bill_id)
+                c.execute("UPDATE bills SET status=? WHERE id=?",( "rejected", bill_id ))
             bot.send_message(user_id,f"❌ Bill #{bill_id} bị từ chối")
             bot.answer_callback_query(call.id,"Đã từ chối")
         elif action=="bill_prompt":
@@ -244,7 +308,34 @@ def cmd_slot(m):
             bot.reply_to(m,f"🎰 {' '.join(s)}\n😢 Thua rồi")
     except: log_exc("/slot")
 
-# ================= ADMIN: QUẢN LÝ KHO =================
+# ================= ADMIN: QUẢN LÝ KHO (inline prompts) =================
+@bot.callback_query_handler(func=lambda c: c.data.startswith("admin_"))
+def cb_admin_actions(call):
+    try:
+        data = call.data
+        caller = call.from_user.id
+        if not is_admin(caller):
+            return bot.answer_callback_query(call.id,"Không có quyền",show_alert=True)
+        if data == "admin_addacc":
+            bot.answer_callback_query(call.id)
+            bot.send_message(caller,"📌 Gửi lệnh:\n/addacc email:pass")
+        elif data == "admin_stock":
+            with db_lock:
+                c.execute("SELECT COUNT(*) FROM stock_acc")
+                cnt=c.fetchone()[0]
+            bot.answer_callback_query(call.id)
+            bot.send_message(caller,f"📦 Có {cnt} ACC trong kho")
+        elif data == "admin_addmoney":
+            bot.answer_callback_query(call.id)
+            bot.send_message(caller,"📌 Gửi lệnh:\n/addmoney <user_id> <amount>")
+        elif data == "admin_broadcast":
+            bot.answer_callback_query(call.id)
+            bot.send_message(caller,"📌 Gửi lệnh:\n/broadcast <message>")
+        elif data == "admin_delacc":
+            bot.answer_callback_query(call.id)
+            bot.send_message(caller,"📌 Gửi lệnh:\n/delacc <id> hoặc /delall")
+    except: log_exc("cb_admin_actions")
+
 @bot.message_handler(commands=["addacc"])
 def cmd_addacc(m):
     if not is_admin(m.from_user.id): return
