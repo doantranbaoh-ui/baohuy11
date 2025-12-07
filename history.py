@@ -1,5 +1,4 @@
 import sqlite3
-from telebot import types
 
 DB = "accounts.db"
 
@@ -31,21 +30,21 @@ def log_history(user_id, action, amount=0, note=""):
     conn.close()
 
 def register_history_handlers(bot):
+
     @bot.message_handler(commands=['history'])
     def view_my_history(message):
         user_id = message.from_user.id
         conn = db()
         c = conn.cursor()
-        c.execute("SELECT action, amount, note, time FROM history WHERE user_id=? ORDER BY id DESC LIMIT 20", 
+        c.execute("SELECT action, amount, note, time FROM history WHERE user_id=? ORDER BY id DESC LIMIT 20",
                   (user_id,))
         rows = c.fetchall()
         conn.close()
 
         if not rows:
-            bot.reply_to(message, "📭 Bạn chưa có giao dịch nào.")
-            return
+            return bot.reply_to(message, "📭 Bạn chưa có giao dịch nào.")
 
-        text = "📜 *Lịch sử giao dịch gần đây:*\n\n"
+        text = "📜 *Lịch sử giao dịch:*\n\n"
         for action, amount, note, time in rows:
             text += f"🔹 *{action}* — {amount}đ\n📝 {note}\n⏰ {time}\n\n"
 
