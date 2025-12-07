@@ -1,102 +1,98 @@
 import sqlite3
+import time
 
-DB = "accounts.db"
+class Database:
+    def __init__(self, path="data.db"):
+        self.conn = sqlite3.connect(path, check_same_thread=False)
+        self.cur = self.conn.cursor()
+        self.setup()
 
-def db():
-    return sqlite3.connect(DB, check_same_thread=False)
-
-# =============================
-# TẠO DATABASE
-# =============================
-def setup_database():
-    conn = db()
-    c = conn.cursor()
-
-    # Bảng user
-    c.execute("""
+    def setup(self):
+        self.cur.execute("""
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
             balance INTEGER DEFAULT 0
         )
-    """)
-
-    # Bảng acc
-    c.execute("""
+        """)
+        self.cur.execute("""
         CREATE TABLE IF NOT EXISTS accounts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            game TEXT,
             info TEXT,
             price INTEGER,
-            sold INTEGER DEFAULT 0
+            sold INTEGER DEFAULT 0,
+            buyer_id INTEGER
         )
-    """)
+        """)
+        self.cur.execute("""
+        CREATE TABLE IF NOT EXISTS giftcodes (
+            code TEXT PRIMARY KEY,
+            amount INTEGER,
+            used INTEGER DEFAULT 0,
+            used_by INTEGER
+        )
+        """)
+        self.cur.execute("""
+        CREATE TABLE IF NOT EXISTS history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            action TEXT,
+            time INTEGER
+        )
+        """)
 
-    conn.commit()
-    conn.close()
+        self.conn.commit()
 
-# =============================
-# USER FUNCTIONS
-# =============================
-def add_user(user_id):
-    conn = db()
-    c = conn.cursor()
-    c.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
-    conn.commit()
-    conn.close()
+    # USERS
+    def add_user(self, uid):
+        self.cur.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (uid,))
+        self.conn.commit()
 
-def get_balance(user_id):
-    conn = db()
-    c = conn.cursor()
-    c.execute("SELECT balance FROM users WHERE user_id=?", (user_id,))
-    row = c.fetchone()
-    conn.close()
-    return row[0] if row else 0
+    def get_balance(self, uid):
+        r = self.cur.execute("SELECT balance FROM users WHERE user_id=?", (uid,)).fetchone()
+        return r[0] if r else 0
 
-def add_balance(user_id, amount):
-    add_user(user_id)
-    conn = db()
-    c = conn.cursor()
-    c.execute("UPDATE users SET balance = balance + ? WHERE user_id=?", (amount, user_id))
-    conn.commit()
-    conn.close()
+    def add_balance(self, uid, amount):
+        self.cur.execute("UPDATE users SET balance = balance + ? WHERE user_id=?", (amount, uid))
+        self.conn.commit()
 
-# =============================
-# ACC MANAGER
-# =============================
-def add_acc(game, info, price):
-    conn = db()
-    c = conn.cursor()
-    c.execute("INSERT INTO accounts (game, info, price) VALUES (?,?,?)", 
-              (game, info, price))
-    conn.commit()
-    conn.close()
+    # ACCOUNTS
+    def add_acc(self, info, price):
+        self.cur.execute("INSERT INTO accounts (info, price) VALUES (?, ?)", (info, price))
+        self.conn.commit()
 
-def list_acc():
-    conn = db()
-    c = conn.cursor()
-    c.execute("SELECT id, game, price FROM accounts WHERE sold=0")
-    rows = c.fetchall()
-    conn.close()
-    return rows
+    def list_acc(self):
+        return self.cur.execute("SELECT * FROM accounts WHERE sold = 0").fetchall()
 
-def get_acc(acc_id):
-    conn = db()
-    c = conn.cursor()
-    c.execute("SELECT id, game, info, price FROM accounts WHERE id=? AND sold=0", (acc_id,))
-    row = c.fetchone()
-    conn.close()
-    return row
+    def get_acc(self, acc_id):
+        return self.cur.execute("SELECT * FROM accounts WHERE id=? AND sold=0", (acc_id,)).fetchone()
 
-def mark_sold(acc_id):
-    conn = db()
-    c = conn.cursor()
-    c.execute("UPDATE accounts SET sold=1 WHERE id=?", (acc_id,))
-    conn.commit()
-    conn.close()
+    def del_acc(self, acc_id):
+        self.cur.execute("DELETE FROM accounts WHERE id=?", (acc_id,))
+        self.conn.commit()
 
-def delete_acc(acc_id):
-    conn = db()
-    c = conn.cursor()
-    c.execute("DELETE FROM accounts WHERE id=?", (acc_id,))
-    conn.commit()
-    conn.close()
+    def buy_acc(self, acc_id, user_id):
+        self.cur.execute("UPDATE accounts SET sold=1, buyer_id=? WHERE id=?", (user_id, acc_id))
+        self.conn.commit()
+
+    # GIFTCODE
+    def add_giftcode(self, code, amount):
+        self.cur.execute("INSERT OR REPLACE INTO giftcodes (code, amount) VALUES (?, ?)", (code, amount))
+        self.conn.commit()
+
+    def use_giftcode(self, uid, code):
+        gc = self.cur.execute("SELECT amount, used FROM giftcodes WHERE code=?", (code,)).fetchone()
+        if not gc or gc[1] == 1:
+            return None
+        self.cur.execute("UPDATE giftcodes SET used=1, used_by=? WHERE code=?", (uid, code))
+        self.conn.commit()
+        return gc[0]
+
+    # HISTORY
+    def add_history(self, uid, text):
+        self.cur.execute("INSERT INTO history (user_id, action, time) VALUES (?, ?, ?)",
+                         (uid, text, int(time.time())))
+        self.conn.commit()
+
+    def get_history(self, uid):
+        return self.cur.execute("SELECT action, time FROM history WHERE user_id=? ORDER BY id DESC LIMIT 20",
+                                (uid,)).fetchall()
