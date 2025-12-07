@@ -1,53 +1,46 @@
 from telebot import types
-from database import list_acc, get_acc, mark_sold, get_balance, add_balance
-from history import log_history
 
-def register_shop_handlers(bot):
+def register_shop_handlers(bot, db):
 
-    @bot.message_handler(commands=['shop'])
-    def shop_cmd(message):
-        send_shop_menu(bot, message)
+    def open_shop(call):
+        cid = call.message.chat.id
+        data = db.list_acc()
 
-def send_shop_menu(bot, message):
-    data = list_acc()
+        if not data:
+            return bot.send_message(cid, "📭 Không có acc nào bán.")
 
-    if not data:
-        return bot.reply_to(message, "📭 Hiện không có acc nào!")
+        for acc in data:
+            btn = types.InlineKeyboardMarkup()
+            btn.add(types.InlineKeyboardButton(f"Mua {acc[2]}đ", callback_data=f"buy_{acc[0]}"))
 
-    text = "🛒 *Danh sách Acc Liên Quân*\n\n"
-    markup = types.InlineKeyboardMarkup()
+            bot.send_message(
+                cid,
+                f"🎮 *ACC LIÊN QUÂN*\n\n"
+                f"ID: `{acc[0]}`\n"
+                f"Thông tin: `{acc[1]}`\n"
+                f"Giá: *{acc[2]}đ*",
+                reply_markup=btn,
+                parse_mode="Markdown"
+            )
 
-    for acc in data:
-        acc_id, game, price = acc
-        markup.add(
-            types.InlineKeyboardButton(f"{game} - {price}đ", callback_data=f"buy_{acc_id}")
-        )
-
-    bot.reply_to(message, text, parse_mode="Markdown", reply_markup=markup)
-
-
-def register_shop_handlers(bot):
-    
     @bot.callback_query_handler(func=lambda call: call.data.startswith("buy_"))
     def buy_acc(call):
+        uid = call.from_user.id
         acc_id = int(call.data.split("_")[1])
-        acc = get_acc(acc_id)
 
+        acc = db.get_acc(acc_id)
         if not acc:
-            return bot.answer_callback_query(call.id, "Acc đã bán hoặc không tồn tại!")
+            return bot.answer_callback_query(call.id, "Acc không tồn tại!")
 
-        acc_id, game, info, price = acc
-        user_id = call.from_user.id
+        balance = db.get_balance(uid)
+        if balance < acc[2]:
+            return bot.send_message(call.message.chat.id, "❌ Không đủ tiền!")
 
-        balance = get_balance(user_id)
-        if balance < price:
-            return bot.answer_callback_query(call.id, "❌ Bạn không đủ tiền!")
+        db.add_balance(uid, -acc[2])
+        db.buy_acc(acc_id, uid)
+        db.add_history(uid, f"Mua acc ID {acc_id} giá {acc[2]}đ")
 
-        add_balance(user_id, -price)
-        mark_sold(acc_id)
+        bot.send_message(uid, f"✅ Mua thành công!\nThông tin acc:\n`{acc[1]}`", parse_mode="Markdown")
 
-        bot.send_message(user_id, f"🎉 Bạn đã mua *{game}* với giá {price}đ!\n\n🔑 Thông tin acc:\n`{info}`",
-                         parse_mode="Markdown")
-
-        log_history(user_id, "Mua acc", price, f"ID {acc_id} - {game}")
-        bot.answer_callback_query(call.id, "Mua thành công!")
+    # return để dùng trong Bot.py
+    return type("Obj", (), {"open_shop": open_shop})
