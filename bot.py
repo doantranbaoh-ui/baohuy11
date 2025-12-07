@@ -4,7 +4,7 @@ from telebot import types
 from keep_alive import keep_alive
 
 # ================= CONFIG =================
-TOKEN = "6367532329:AAFTX43OlmNc0JpSwOagE8W0P22yOBH0lLU"  # Thay token thật ở đây
+TOKEN = "6367532329:AAFTX43OlmNc0JpSwOagE8W0P22yOBH0lLU"  # Thay token thật
 OWNER_ID = 5736655322
 PRICE_RANDOM = 2000
 DAILY_REPORT_HOUR = 24*60*60
@@ -116,6 +116,12 @@ def cmd_start(m):
             "/slot - Chơi Slot\n"
             "/redeem <code> - Nhập giftcode\n"
             "/nap <sotien> - Gửi yêu cầu nạp tiền\n"
+            "/addacc <acc> - Admin thêm acc\n"
+            "/stock - Admin xem kho\n"
+            "/listacc - Admin xem danh sách acc\n"
+            "/delacc <id> - Admin xóa acc\n"
+            "/delall - Admin xóa toàn bộ kho\n"
+            "/export - Admin xuất kho acc\n"
         )
         bot.reply_to(m,text,parse_mode="Markdown")
         send_user_menu(m.chat.id)
@@ -243,7 +249,6 @@ def handle_photo(msg):
                       (uid,file_id,0,"pending",time.ctime()))
             bill_id = c.lastrowid
         bot.reply_to(msg,f"⏳ Hoá đơn đã gửi, chờ admin duyệt. (Bill ID: {bill_id})")
-        # Gửi bill cho owner/admin
         try:
             kb = types.InlineKeyboardMarkup(row_width=2)
             kb.add(
@@ -351,6 +356,64 @@ def cmd_addmoney(m):
     except Exception:
         log_exc("/addmoney")
 
+# ================= ADMIN STOCK =================
+@bot.message_handler(commands=["addacc"])
+def cmd_addacc(m):
+    if not is_admin(m.from_user.id): return
+    data = m.text.replace("/addacc","").strip()
+    if not data: return bot.reply_to(m,"📌 /addacc email:pass")
+    with db_lock:
+        c.execute("INSERT INTO stock_acc(acc) VALUES(?)",(data,))
+    bot.reply_to(m,"➕ Đã thêm acc vào kho")
+
+@bot.message_handler(commands=["stock"])
+def cmd_stock(m):
+    if not is_admin(m.from_user.id): return
+    with db_lock:
+        c.execute("SELECT COUNT(*) FROM stock_acc")
+        cnt = c.fetchone()[0]
+    bot.reply_to(m,f"📦 Còn {cnt} ACC trong kho")
+
+@bot.message_handler(commands=["listacc"])
+def cmd_listacc(m):
+    if not is_admin(m.from_user.id): return
+    limit=100
+    with db_lock:
+        c.execute("SELECT id,acc FROM stock_acc LIMIT ?",(limit,))
+        rows=c.fetchall()
+    if not rows: return bot.reply_to(m,"Kho trống")
+    text="\n".join([f"{r[0]}. {r[1]}" for r in rows])
+    bot.reply_to(m,f"📄 Danh sách (max {limit}):\n{text}\n/delacc <id>")
+
+@bot.message_handler(commands=["delacc"])
+def cmd_delacc(m):
+    if not is_admin(m.from_user.id): return
+    try: aid=int(m.text.split()[1])
+    except: return bot.reply_to(m,"📌 /delacc <id>")
+    with db_lock:
+        c.execute("DELETE FROM stock_acc WHERE id=?",(aid,))
+    bot.reply_to(m,"🗑 Đã xoá acc")
+
+@bot.message_handler(commands=["delall"])
+def cmd_delall(m):
+    if not is_admin(m.from_user.id): return
+    with db_lock:
+        c.execute("DELETE FROM stock_acc")
+    bot.reply_to(m,"🔥 Đã xoá toàn bộ kho")
+
+@bot.message_handler(commands=["export"])
+def cmd_export(m):
+    if not is_admin(m.from_user.id): return
+    with db_lock:
+        c.execute("SELECT acc FROM stock_acc")
+        rows = c.fetchall()
+    path = "stock_export.txt"
+    with open(path,"w",encoding="utf-8") as f:
+        for r in rows: f.write(r[0]+"\n")
+    bot.send_document(m.chat.id, open(path,"rb"))
+    try: os.remove(path)
+    except: pass
+
 # ================= DAILY REPORT =================
 def daily_report_thread():
     while True:
@@ -371,7 +434,7 @@ keep_alive()
 print("BOT STARTED!")
 while True:
     try:
-        bot.infinity_polling(timeout=60,long_polling_timeout=60,skip_pending=True)
+        bot.infinity_polling(timeout=60,long_polling_timeout=60,skip_pending=False)
     except Exception as e:
         print("BOT CRASH:",e)
         time.sleep(5)
