@@ -2,118 +2,119 @@
 import telebot
 from telebot import types
 
+from database import Database
+from admin import register_admin_handlers
+from shop import register_shop_handlers
+from giftcode import register_giftcode_handlers
+from history import register_history_handlers
+from keep_alive import keep_alive
+
 # ================= CONFIG =================
 TOKEN = "6367532329:AAE7uL4iMtoRBkM-Y8GIHOYDD-04XBzaAWM"
 OWNER_ID = 5736655322
 
-# =============== IMPORT MODULE ===============
-from keep_alive import keep_alive
-from database import setup_database
-from admin import register_admin_handlers
-from shop import register_shop_handlers
-from giftcode import register_giftcode_handlers
-from history import register_history_handlers, setup_history
-
-# =============== START BOT ===============
+# ================= INIT ===================
 bot = telebot.TeleBot(TOKEN)
+db = Database("data.db")
 
-# =============== MENU CHÍNH ===============
-@bot.message_handler(commands=['start'])
-def start(message):
-    user_id = message.from_user.id
-    markup = types.InlineKeyboardMarkup()
+# Load module handlers
+admin = register_admin_handlers(bot, db, OWNER_ID)
+shop = register_shop_handlers(bot, db)
+giftcode = register_giftcode_handlers(bot, db)
+history = register_history_handlers(bot, db)
 
-    btn1 = types.InlineKeyboardButton("🛒 Shop Acc", callback_data="shop_menu")
-    btn2 = types.InlineKeyboardButton("💳 Nạp Tiền", callback_data="nap_tien")
-    btn3 = types.InlineKeyboardButton("🎁 Giftcode", callback_data="gift_menu")
-    btn4 = types.InlineKeyboardButton("📜 Lịch Sử", callback_data="history_menu")
 
-    markup.add(btn1)
-    markup.add(btn2, btn3)
-    markup.add(btn4)
+# ================= MAIN MENU ==============
+def main_menu():
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("🎮 Mua Acc", callback_data="shop"))
+    kb.add(
+        types.InlineKeyboardButton("💳 Nạp Tiền", callback_data="nap"),
+        types.InlineKeyboardButton("🎁 Giftcode", callback_data="gift"),
+    )
+    kb.add(types.InlineKeyboardButton("🧾 Lịch Sử", callback_data="history"))
+    return kb
 
-    if user_id == OWNER_ID:
-        btn_admin = types.InlineKeyboardButton("👑 Admin Menu", callback_data="admin_menu")
-        markup.add(btn_admin)
 
-    bot.reply_to(
-        message,
-        "🎉 *Chào mừng bạn đến Shop Acc Liên Quân!* 🎉\n\n"
-        "Vui lòng chọn chức năng bên dưới:",
-        parse_mode="Markdown",
-        reply_markup=markup
+# ================= ADMIN MENU =============
+def admin_menu():
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("📥 Thêm Acc", callback_data="admin_addacc"))
+    kb.add(types.InlineKeyboardButton("📋 List Acc", callback_data="admin_listacc"))
+    kb.add(types.InlineKeyboardButton("❌ Xóa Acc", callback_data="admin_delacc"))
+    kb.add(types.InlineKeyboardButton("🎁 Giftcode", callback_data="admin_giftcode"))
+    return kb
+
+
+# ================== /START =================
+@bot.message_handler(commands=["start"])
+def start_cmd(msg):
+    uid = msg.from_user.id
+    db.add_user(uid)
+    bot.send_message(
+        msg.chat.id,
+        f"🤖 Xin chào *{msg.from_user.first_name}*!\n"
+        f"Chào mừng đến shop bán Acc Liên Quân.",
+        reply_markup=main_menu(),
+        parse_mode="Markdown"
     )
 
-# =============== CALLBACK MENU ===============
-@bot.callback_query_handler(func=lambda call: True)
-def callback_menu(call):
-    if call.data == "shop_menu":
-        register_shop_handlers.send_shop_menu(bot, call.message)
 
-    elif call.data == "nap_tien":
+# ================== /ADMIN =================
+@bot.message_handler(commands=["admin"])
+def admin_cmd(msg):
+    if msg.from_user.id != OWNER_ID:
+        return bot.reply_to(msg, "❌ Bạn không phải admin!")
+    bot.send_message(msg.chat.id, "🔧 MENU ADMIN", reply_markup=admin_menu())
+
+
+# =============== CALLBACK ==================
+@bot.callback_query_handler(func=lambda call: True)
+def callback(call):
+    cid = call.message.chat.id
+    data = call.data
+
+    # ----- SHOP -----
+    if data == "shop":
+        shop.open_shop(call)
+        return
+
+    # ----- NẠP TIỀN -----
+    if data == "nap":
+        bot.answer_callback_query(call.id)
         bot.send_message(
-            call.message.chat.id,
-            "💳 *Hướng dẫn nạp tiền:*\n"
+            cid,
+            "💳 *Hướng dẫn nạp tiền*\n"
             "• STK: 0971487462\n"
-            "• Ngân hàng: MB\n"
-            "• Nội dung: baohuy\n"
-            "• Số tiền: 10000đ\n\n"
-            "📸 Gửi ảnh bill trực tiếp vào chat để admin duyệt!",
+            "• Ngân hàng: MB Bank\n"
+            "• Nội dung: 5736655322\n"
+            "• Số tiền: 10.000đ\n\n"
+            "📸 Gửi ảnh bill vào đây để admin duyệt.",
             parse_mode="Markdown"
         )
+        return
 
-    elif call.data == "gift_menu":
-        register_giftcode_handlers.gift_menu(bot, call.message)
+    # ----- GIFTCODE -----
+    if data == "gift":
+        giftcode.open_giftcode(call)
+        return
 
-    elif call.data == "history_menu":
-        bot.send_message(call.message.chat.id, "/history")
+    # ----- HISTORY -----
+    if data == "history":
+        history.open_history(call)
+        return
 
-    elif call.data == "admin_menu":
-        register_admin_handlers.send_admin_menu(bot, call.message)
+    # ============= ADMIN CALLBACK ============
+    if data.startswith("admin_"):
+        if call.from_user.id != OWNER_ID:
+            return bot.answer_callback_query(call.id, "Không phải admin!")
+        # callback xử lý nằm trong admin.py
+        return
 
-# =============== BILL NẠP TIỀN ===============
-@bot.message_handler(content_types=['photo'])
-def handle_bill(message):
-    user_id = message.from_user.id
-    caption = f"📩 Bill nạp tiền từ user {user_id}\nDuyệt hoặc từ chối?"
 
-    markup = types.InlineKeyboardMarkup()
-    markup.add(
-        types.InlineKeyboardButton("✅ Duyệt", callback_data=f"duyet_{user_id}"),
-        types.InlineKeyboardButton("❌ Từ chối", callback_data=f"huy_{user_id}")
-    )
-
-    bot.send_photo(OWNER_ID, message.photo[-1].file_id, caption=caption, reply_markup=markup)
-    bot.reply_to(message, "📤 Bill đã gửi admin duyệt!")
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("duyet_") or call.data.startswith("huy_"))
-def duyet_nap(call):
-    from database import add_balance
-
-    user_id = int(call.data.split("_")[1])
-
-    if call.data.startswith("duyet_"):
-        amount = 10000  # fix cứng hoặc sửa tùy bạn
-        add_balance(user_id, amount)
-        bot.send_message(user_id, f"💰 Nạp thành công +{amount}đ!")
-        bot.send_message(call.message.chat.id, "✅ Đã duyệt thành công!")
-    else:
-        bot.send_message(user_id, "❌ Admin đã từ chối bill.")
-        bot.send_message(call.message.chat.id, "⛔ Đã từ chối!")
-
-# =============== KHỞI TẠO DATABASE ===============
-setup_database()
-setup_history()
-
-# =============== ĐĂNG KÝ MODULE ===============
-register_admin_handlers(bot)
-register_shop_handlers(bot)
-register_giftcode_handlers(bot)
-register_history_handlers(bot)
-
-# =============== KEEP ALIVE ===============
+# ============= KEEP ALIVE ==================
 keep_alive()
 
-# =============== RUN BOT ===============
+# ============= RUN BOT =====================
 print("Bot is running...")
 bot.infinity_polling()
