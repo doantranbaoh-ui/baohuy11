@@ -1,20 +1,24 @@
 #!/usr/bin/env python3
-# ===== BOT SHOP LIÊN QUÂN FULL + AUTO DUYỆT NẠP =====
+# ================================================
+# BOT BÁN ACC RANDOM LIÊN QUÂN – FULL FEATURE
+# ================================================
 
-import telebot, sqlite3, os
+import telebot, sqlite3, random, os
 from telebot import types
-from keep_alive import keep_alive
+from keep_alive import keep_alive   # <== chạy web để uptime
+keep_alive()
 
-TOKEN = "6367532329:AAEyb8Uyot8Zj-wBbAyy-ZjJpt4JIeIKGvY"
-ADMIN_ID = 5736655322     # EDIT ID ADMIN
+# ====================== CONFIG ======================
+TOKEN       = "6367532329:AAEyb8Uyot8Zj-wBbAyy-ZjJpt4JIeIKGvY"
+ADMIN_ID    = 5736655322                  # sửa ID admin vào đây
+PRICE       = 2000                       # giá mỗi lần /buy
+ACC_FILE    = "acc.txt"
+DB_FILE     = "db.sqlite"
 
 bot = telebot.TeleBot(TOKEN)
 
-# ========== DATABASE ==========
-if not os.path.exists("db.sqlite"):
-    open("db.sqlite","w").close()
-
-con = sqlite3.connect("db.sqlite", check_same_thread=False)
+# ====================== DATABASE ======================
+con = sqlite3.connect(DB_FILE, check_same_thread=False)
 cur = con.cursor()
 
 cur.execute("""CREATE TABLE IF NOT EXISTS users(
@@ -23,211 +27,196 @@ cur.execute("""CREATE TABLE IF NOT EXISTS users(
     total_topup INTEGER DEFAULT 0
 )""")
 
-cur.execute("""CREATE TABLE IF NOT EXISTS history(
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER,
-    action TEXT,
-    data TEXT,
-    time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-)""")
-
 cur.execute("""CREATE TABLE IF NOT EXISTS topup_requests(
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER,
     amount INTEGER,
-    img TEXT,
+    img_id TEXT,
     status TEXT DEFAULT 'pending'
+)""")
+
+cur.execute("""CREATE TABLE IF NOT EXISTS history(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    account TEXT
 )""")
 
 con.commit()
 
-# ========== FILE ACC ==========
-if not os.path.exists("acc.txt"):
-    open("acc.txt","w").close()
 
-def get_acc():
-    with open("acc.txt") as f:
-        accs=f.read().strip().splitlines()
-    if not accs:return None
-    acc=accs[0]
-    with open("acc.txt","w") as f:f.write("\n".join(accs[1:]))
-    return acc
+# ====================== HÀM PHỤ ======================
+def get_balance(uid):
+    cur.execute("SELECT balance FROM users WHERE id=?", (uid,))
+    row = cur.fetchone()
+    return row[0] if row else 0
 
-def reg(uid):
-    cur.execute("INSERT OR IGNORE INTO users(id) VALUES(?)",(uid,))
+def add_balance(uid, amount):
+    if not user_exists(uid): create_user(uid)
+    cur.execute("UPDATE users SET balance = balance + ?, total_topup = total_topup + ? WHERE id=?",(amount,amount,uid))
     con.commit()
 
-# ========== UI START ==========
-@bot.message_handler(commands=["start"])
+def minus_balance(uid, amount):
+    cur.execute("UPDATE users SET balance = balance - ? WHERE id=?", (amount, uid))
+    con.commit()
+
+def user_exists(uid):
+    cur.execute("SELECT id FROM users WHERE id=?", (uid,))
+    return cur.fetchone()
+
+def create_user(uid):
+    cur.execute("INSERT INTO users(id,balance,total_topup) VALUES(?,?,?)",(uid,0,0))
+    con.commit()
+
+def random_acc():
+    if not os.path.exists(ACC_FILE): return None
+    with open(ACC_FILE,'r') as f:
+        lines=f.read().splitlines()
+    if not lines: return None
+    acc=random.choice(lines)
+    new=[x for x in lines if x!=acc]
+    open(ACC_FILE,'w').write("\n".join(new))
+    return acc
+
+
+# ====================== COMMAND ======================
+@bot.message_handler(commands=['start'])
 def start(m):
-    reg(m.from_user.id)
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add("💰 Số dư","🛒 Mua acc","💳 Nạp tiền")
-    markup.add("📜 Lịch sử","🏆 Top nạp")
-
+    uid=m.from_user.id
+    if not user_exists(uid): create_user(uid)
     bot.reply_to(m,
-f"""
-🔥 *SHOP ACC LIÊN QUÂN – AUTO* 🔥
+f"""👋 Chào {m.from_user.first_name}!
 
-Chào {m.from_user.first_name} 👋
-Chức năng bot:
+💰 Tiền hiện có: {get_balance(uid)}đ
+🎁 Lệnh dùng:
+—————————————
+/buy – Mua acc random {PRICE}đ
+/nap – Hướng dẫn nạp
+/top – Top nạp tiền
+/history – Lịch sử mua
 
-💰 /balance — Xem tiền
-💳 /nap — Hướng dẫn nạp
-🛒 /buy — Mua acc random 2K
-📜 /history — Lịch sử mua
-🏆 /top — Top nạp tiền
+(Admin)
+/addacc user|pass
+/sendfile – Gửi acc.txt
+""")
 
-👑 ADMIN:
-`/addbalance id tiền`
-`/addacc user|pass`
-`/getacc`
 
-Gửi ảnh + nội dung: `nap 20000` để nạp tiền!
-""",parse_mode="Markdown",reply_markup=markup)
+# ====================== MUA ACC ======================
+@bot.message_handler(commands=['buy'])
+def buy(m):
+    uid=m.from_user.id
+    balance=get_balance(uid)
 
-# Bắt phím menu nhanh
-@bot.message_handler(func=lambda x:x.text=="💰 Số dư")
-def x(m): balance(m)
-@bot.message_handler(func=lambda x:x.text=="💳 Nạp tiền")
-def x(m): nap(m)
-@bot.message_handler(func=lambda x:x.text=="🛒 Mua acc")
-def x(m): buy(m)
-@bot.message_handler(func=lambda x:x.text=="📜 Lịch sử")
-def x(m): hist(m)
-@bot.message_handler(func=lambda x:x.text=="🏆 Top nạp")
-def x(m): top(m)
+    if balance < PRICE: 
+        return bot.reply_to(m,f"❗ Bạn còn thiếu {PRICE-balance}đ để mua!")
 
-# ========== BALANCE ==========
-@bot.message_handler(commands=["balance"])
-def balance(m):
-    bal=cur.execute("SELECT balance FROM users WHERE id=?",(m.from_user.id,)).fetchone()[0]
-    bot.reply_to(m,f"💰 Số dư hiện tại: *{bal}đ*",parse_mode="Markdown")
+    acc=random_acc()
+    if not acc: return bot.reply_to(m,"❗ Hết acc rồi, đợi admin thêm!")
 
-# ========== NẠP TIỀN ==========
-@bot.message_handler(commands=["nap"])
+    minus_balance(uid, PRICE)
+    cur.execute("INSERT INTO history(user_id,account) VALUES(?,?)",(uid,acc))
+    con.commit()
+
+    bot.reply_to(m,f"🎉 Mua thành công!\n🔑 Tài khoản: `{acc}`",parse_mode="Markdown")
+
+
+# ====================== NẠP TIỀN ======================
+@bot.message_handler(commands=['nap'])
 def nap(m):
     bot.reply_to(m,
-"""
-💳 *HƯỚNG DẪN NẠP TIỀN*
+"""💳 NẠP TIỀN BANK (gửi ảnh chuyển khoản kèm caption)
 
-🏦 MB BANK  
-🔢 STK: *0971487462*  
-📌 Nội dung: `NAP-{telegram_id}`  
-💰 Tối thiểu 10.000đ
+📌 Cú pháp:
+Gửi ảnh + ghi chú:  `nap 20000`
 
-📸 Sau khi chuyển khoản, gửi ảnh + nội dung:
-`nap số_tiền`
+⏳ Admin sẽ duyệt trong vài phút.""")
 
-Ví dụ: gửi ảnh kèm caption: `nap 20000`
-""".replace("{telegram_id}",str(m.from_user.id)),parse_mode="Markdown")
-
-# ========== XỬ LÝ ẢNH NẠP ==========
-@bot.message_handler(content_types=["photo"])
-def img(m):
+@bot.message_handler(content_types=['photo'])
+def photo(m):
     if not (m.caption and m.caption.startswith("nap")):
-        return bot.reply_to(m,"❗ Caption ảnh phải dạng `nap số tiền`")
+        return bot.reply_to(m,"📌 Gửi ảnh + ghi: nap số_tiền")
 
     try: amount=int(m.caption.split()[1])
-    except:return bot.reply_to(m,"Sai cú pháp! Ví dụ:\n`nap 20000`",parse_mode="Markdown")
+    except: return bot.reply_to(m,"Sai cú pháp. VD: nap 20000")
 
     uid=m.from_user.id
     img=m.photo[-1].file_id
 
-    cur.execute("INSERT INTO topup_requests(user_id,amount,img) VALUES(?,?,?)",(uid,amount,img))
+    cur.execute("INSERT INTO topup_requests(user_id,amount,img_id) VALUES(?,?,?)",(uid,amount,img))
     con.commit()
 
-    # Gửi cho admin duyệt
-    kb=types.InlineKeyboardMarkup()
-    kb.add(
-        types.InlineKeyboardButton("✔ DUYỆT",callback_data=f"ok_{uid}_{amount}"),
-        types.InlineKeyboardButton("✖ TỪ CHỐI",callback_data=f"no_{uid}")
+    markup = types.InlineKeyboardMarkup()
+    markup.add(
+        types.InlineKeyboardButton("✔ Duyệt", callback_data=f"ok_{uid}_{amount}"),
+        types.InlineKeyboardButton("✖ Từ chối", callback_data=f"no_{uid}")
     )
-    bot.send_photo(ADMIN_ID,img,f"💸 YÊU CẦU NẠP\nUser `{uid}`\nSố tiền: *{amount}đ*",parse_mode="Markdown",reply_markup=kb)
-    bot.reply_to(m,"📥 Đã gửi yêu cầu nạp, vui lòng chờ admin duyệt!")
 
-# ========== CALLBACK DUYỆT ==========
-@bot.callback_query_handler(func=lambda c:c.data.startswith(("ok","no")))
+    bot.send_photo(ADMIN_ID,img,
+        f"💰 YÊU CẦU NẠP\nUser: {uid}\nSố tiền: {amount}đ",
+        reply_markup=markup)
+
+    bot.reply_to(m,"⏳ Đã gửi admin duyệt...")
+
+
+# ====================== XỬ LÝ DUYỆT ======================
+@bot.callback_query_handler(func=lambda c:True)
 def cb(c):
-    if c.from_user.id!=ADMIN_ID:
-        return bot.answer_callback_query(c.id,"Không phải admin")
 
-    # DUYỆT
+    if c.from_user.id!=ADMIN_ID:
+        return bot.answer_callback_query(c.id,"Bạn không phải admin!")
+
+    # duyệt
     if c.data.startswith("ok"):
         _,uid,amount=c.data.split("_")
-        uid,amount=int(uid),int(amount)
+        add_balance(int(uid),int(amount))
+        bot.send_message(uid,f"💳 Nạp {amount}đ thành công!")
+        return bot.edit_message_caption(chat_id=c.message.chat.id,
+            message_id=c.message.message_id,
+            caption="✔ Đã duyệt giao dịch")
 
-        cur.execute("UPDATE users SET balance=balance+?, total_topup=total_topup+? WHERE id=?",(amount,amount,uid))
-        con.commit()
-        bot.send_message(uid,f"🎉 Nạp *{amount}đ* thành công! Số dư đã được cộng.",parse_mode="Markdown")
-        bot.answer_callback_query(c.id,"Đã duyệt")
-        return
-
-    # TỪ CHỐI
+    # từ chối
     if c.data.startswith("no"):
-        uid=int(c.data.replace("no_",""))
-        bot.send_message(uid,"❗ Giao dịch nạp bị từ chối!")
-        bot.answer_callback_query(c.id,"Đã từ chối")
+        _,uid=c.data.split("_")
+        bot.send_message(uid,"❗ Giao dịch nạp bị từ chối.")
+        return bot.edit_message_caption(chat_id=c.message.chat.id,
+            message_id=c.message.message_id,
+            caption="✖ Đã từ chối yêu cầu")
 
-# ========== BUY ==========
-@bot.message_handler(commands=["buy"])
-def buy(m):
-    PRICE=2000
-    uid=m.from_user.id
-    bal=cur.execute("SELECT balance FROM users WHERE id=?",(uid,)).fetchone()[0]
 
-    if bal<PRICE: return bot.reply_to(m,"❗ Không đủ tiền!")
-
-    acc=get_acc()
-    if not acc:return bot.reply_to(m,"⚠ Hết hàng, liên hệ admin thêm")
-
-    cur.execute("UPDATE users SET balance=balance-? WHERE id=?",(PRICE,uid))
-    cur.execute("INSERT INTO history(user_id,action,data) VALUES(?,?,?)",(uid,"BUY",acc))
-    con.commit()
-
-    bot.reply_to(m,f"🎉 *MUA THÀNH CÔNG*\n`{acc}`",parse_mode="Markdown")
-
-# ========== LỊCH SỬ ==========
-@bot.message_handler(commands=["history"])
-def hist(m):
-    data=cur.execute("SELECT data,time FROM history WHERE user_id=? ORDER BY id DESC LIMIT 10",(m.from_user.id,)).fetchall()
-    if not data:return bot.reply_to(m,"Chưa mua lần nào!")
-    msg="\n".join([f"• `{d[0]}` ({d[1]})" for d in data])
-    bot.reply_to(m,"📜 *LỊCH SỬ MUA:*\n"+msg,parse_mode="Markdown")
-
-# ========== TOP ==========
-@bot.message_handler(commands=["top"])
+# ====================== TOP & HISTORY ======================
+@bot.message_handler(commands=['top'])
 def top(m):
-    data=cur.execute("SELECT id,total_topup FROM users ORDER BY total_topup DESC LIMIT 10").fetchall()
-    if not data:return bot.reply_to(m,"Chưa ai nạp!")
-    text="🏆 *TOP NẠP TIỀN*\n"
-    for i,(uid,money) in enumerate(data,1):
-        text+=f"{i}. `{uid}` — {money}đ\n"
-    bot.reply_to(m,text,parse_mode="Markdown")
+    cur.execute("SELECT id,total_topup FROM users ORDER BY total_topup DESC LIMIT 10")
+    ranks=cur.fetchall()
+    if not ranks: return bot.reply_to(m,"Chưa có ai nạp!")
 
-# ========== ADMIN ==========
-@bot.message_handler(commands=["addbalance"])
-def addbalance(m):
-    if m.from_user.id!=ADMIN_ID:return
-    try:
-        uid,amount=m.text.split()[1],int(m.text.split()[2])
-        cur.execute("UPDATE users SET balance=balance+?, total_topup=total_topup+? WHERE id=?",(amount,amount,uid))
-        con.commit()
-        bot.reply_to(m,"✔ Đã cộng tiền")
-    except:bot.reply_to(m,"Dùng: /addbalance id tiền")
+    text="🏆 TOP NẠP TIỀN\n\n"
+    for i,(uid,total) in enumerate(ranks,1):
+        text+=f"{i}. {uid} – {total}đ\n"
+    bot.reply_to(m,text)
 
-@bot.message_handler(commands=["addacc"])
+@bot.message_handler(commands=['history'])
+def his(m):
+    uid=m.from_user.id
+    cur.execute("SELECT account FROM history WHERE user_id=?",(uid,))
+    data=cur.fetchall()
+    if not data: return bot.reply_to(m,"Chưa mua lần nào!")
+    text="\n".join([f"🔑 {x[0]}" for x in data[-10:]])
+    bot.reply_to(m,"📝 Lịch sử 10 lần cuối:\n"+text)
+
+
+# ====================== ADMIN TOOLS ======================
+@bot.message_handler(commands=['addacc'])
 def addacc(m):
-    if m.from_user.id!=ADMIN_ID:return
+    if m.from_user.id!=ADMIN_ID: return
     acc=m.text.replace("/addacc ","")
-    with open("acc.txt","a")as f:f.write(acc+"\n")
-    bot.reply_to(m,"✔ Đã thêm acc")
+    open(ACC_FILE,'a').write(acc+"\n")
+    bot.reply_to(m,"✔ Đã thêm acc!")
 
-@bot.message_handler(commands=["getacc"])
-def getacc(m):
-    if m.from_user.id!=ADMIN_ID:return
-    bot.send_document(m.chat.id,open("acc.txt","rb"))
+@bot.message_handler(commands=['sendfile'])
+def sendfile(m):
+    if m.from_user.id!=ADMIN_ID: return
+    bot.send_document(m.chat.id, open(ACC_FILE,'rb'))
 
-# RUN + KEEP ALIVE
-keep_alive()
+
+# ====================== RUN ======================
 bot.infinity_polling()
