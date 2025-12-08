@@ -1,220 +1,146 @@
-#!/usr/bin/env python3
-import telebot, sqlite3, random, uuid, os
-from telebot import types
 from keep_alive import keep_alive
+keep_alive()
 
-# ================== CẤU HÌNH ==================
-TOKEN = "6367532329:AAEyb8Uyot8Zj-wBbAyy-ZjJpt4JIeIKGvY"        # <---- THAY TOKEN
-ADMIN_ID = 5736655322           # <---- ID ADMIN
-PRICE_RANDOM = 2000             # Giá mua acc random
+import telebot, sqlite3, os
 
-DB_NAME = "db.sqlite"
-
-
-# ================== CHECK + TẠO DB ==================
-def check_db():
-    if not os.path.exists(DB_NAME):
-        return
-    try:
-        con = sqlite3.connect(DB_NAME)
-        con.execute("SELECT name FROM sqlite_master")
-        con.close()
-    except:
-        print("⚠ DB lỗi → Tạo mới")
-        os.remove(DB_NAME)
-
-check_db()
-
-
-# ============ KẾT NỐI DATABASE ===============
-db = sqlite3.connect(DB_NAME, check_same_thread=False)
-cur = db.cursor()
-
-cur.execute("""CREATE TABLE IF NOT EXISTS users(
-    id INTEGER PRIMARY KEY,
-    balance INTEGER DEFAULT 0
-)""")
-
-cur.execute("""CREATE TABLE IF NOT EXISTS accounts(
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    data TEXT
-)""")
-
-cur.execute("""CREATE TABLE IF NOT EXISTS orders(
-    id TEXT,
-    user_id INTEGER,
-    amount INTEGER,
-    img TEXT,
-    status TEXT
-)""")
-
-db.commit()
-
-
-# ====== HÀM XỬ LÝ TIỀN ======
-def get_balance(uid):
-    cur.execute("SELECT balance FROM users WHERE id=?", (uid,))
-    x = cur.fetchone()
-    return x[0] if x else 0
-
-def add_balance(uid, amount):
-    cur.execute("UPDATE users SET balance = balance + ? WHERE id=?", (amount, uid))
-    db.commit()
-
-def reduce_balance(uid, amount):
-    cur.execute("UPDATE users SET balance = balance - ? WHERE id=?", (amount, uid))
-    db.commit()
-
+TOKEN = "6367532329:AAEyb8Uyot8Zj-wBbAyy-ZjJpt4JIeIKGvY" # <-- nhập token bot
+ADMIN_ID = 5736655322    # <-- sửa ID admin
 
 bot = telebot.TeleBot(TOKEN)
 
+# ========================= DATABASE =========================
+if not os.path.exists("data.db"):
+    conn = sqlite3.connect("data.db", check_same_thread=False)
+    cur = conn.cursor()
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS users(
+        id INTEGER PRIMARY KEY,
+        balance INTEGER DEFAULT 0
+    )""")
+    conn.commit()
+else:
+    conn = sqlite3.connect("data.db", check_same_thread=False)
+    cur = conn.cursor()
 
-# ================== START ==================
-@bot.message_handler(commands=["start"])
-def start(msg):
-    cur.execute("INSERT OR IGNORE INTO users(id) VALUES(?)",(msg.from_user.id,))
-    db.commit()
+# ========================= FUNCTION =========================
+def add_user(uid):
+    cur.execute("INSERT OR IGNORE INTO users(id,balance) VALUES(?,0)", (uid,))
+    conn.commit()
 
-    bot.reply_to(msg,
-f"""👋 Chào *{msg.from_user.first_name}*  
-
-💰 Số dư hiện tại: *{get_balance(msg.from_user.id)}đ*
-
-🛒 Lệnh sử dụng:
-• /nap - Nạp tiền
-• /buy - Mua acc random {PRICE_RANDOM}đ
-• /check - Xem số acc còn
-• /addacc user|pass (admin)
-• /duyet bill tiền (admin)
-
-Chúc bạn mua acc may mắn ❤️
-""", parse_mode="Markdown")
-
-
-# ================== NẠP TIỀN ==================
-@bot.message_handler(commands=["nap"])
-def nap(msg):
-    bill_id = str(uuid.uuid4())[:8]
-
-    bot.reply_to(msg,
-f"""💳 Vui lòng chuyển khoản:
-
-🏦 MB Bank  
-🔢 STK: *0971487462*  
-📝 Nội dung: `{bill_id}`  
-💵 Số tiền: tối thiểu 10.000đ
-
-📸 Sau khi chuyển, gửi ảnh kèm lệnh:
-`/xacnhan {bill_id}` + ảnh chứng minh thanh toán
-
-⏳ Bill có hiệu lực 20 phút.
-""", parse_mode="Markdown")
-
-
-@bot.message_handler(commands=["xacnhan"])
-def confirm(msg):
-    text = msg.text.split()
-
-    if len(text) < 2 or not msg.photo:
-        return bot.reply_to(msg,"❗ Dùng dạng:\n`/xacnhan bill` + kèm ảnh",parse_mode="Markdown")
-
-    bill = text[1]
-    img_id = msg.photo[-1].file_id
-
-    cur.execute("INSERT INTO orders VALUES(?,?,?,?,?)",
-                (bill,msg.from_user.id,0,img_id,"pending"))
-    db.commit()
-
-    bot.reply_to(msg,"⏳ Đã gửi bill, chờ admin duyệt!")
-    bot.send_photo(
-        ADMIN_ID,
-        img_id,
-f"""📩 Bill mới từ `{msg.from_user.id}`  
-Mã bill: `{bill}`
-
-Duyệt bằng lệnh:
-`/duyet {bill} số_tiền`
-""", parse_mode="Markdown")
-
-
-# ================== ADMIN DUYỆT ==================
-@bot.message_handler(commands=["duyet"])
-def approve(msg):
-    if msg.from_user.id != ADMIN_ID:
-        return
-
-    text = msg.text.split()
-    if len(text) < 3:
-        return bot.reply_to(msg,"Dạng: /duyet bill 20000")
-
-    bill, money = text[1], int(text[2])
-    cur.execute("SELECT user_id FROM orders WHERE id=? AND status='pending'", (bill,))
+def get_balance(uid):
+    cur.execute("SELECT balance FROM users WHERE id=?", (uid,))
     row = cur.fetchone()
+    return row[0] if row else 0
 
-    if not row:
-        return bot.reply_to(msg,"❗ Bill không tồn tại hoặc đã duyệt")
+def set_balance(uid, amount):
+    cur.execute("UPDATE users SET balance=? WHERE id=?", (amount, uid))
+    conn.commit()
 
-    uid = row[0]
-    add_balance(uid,money)
-    cur.execute("UPDATE orders SET status='done' WHERE id=?", (bill,))
-    db.commit()
+def add_balance(uid, amount):
+    new = get_balance(uid) + amount
+    set_balance(uid, new)
+    return new
 
-    bot.send_message(uid,f"💳 Nạp thành công +{money}đ vào tài khoản!")
-    bot.reply_to(msg,"✔ Đã duyệt bill")
+# Lấy acc từ acc.txt
+def get_account():
+    if not os.path.exists("acc.txt"): return None
+    with open("acc.txt","r",encoding="utf-8") as f:
+        data = f.readlines()
+    if len(data)==0: return None
+    acc = data[0].strip()
+    open("acc.txt","w",encoding="utf-8").write("".join(data[1:]))
+    return acc
 
+# ========================= COMMAND =========================
+@bot.message_handler(commands=['start'])
+def start(m):
+    add_user(m.from_user.id)
+    bot.reply_to(m,
+"""
+🔥 **SHOP ACC LIÊN QUÂN**  
+Lệnh sử dụng:
 
-# ================== BUY ACC ==================
-@bot.message_handler(commands=["buy"])
-def buy(msg):
-    uid = msg.from_user.id
-    bal = get_balance(uid)
+💰 /balance — Xem số dư  
+💳 /nap — Nạp tiền  
+🎁 /buy <giá> — Mua acc random (VD: /buy 2000)  
+📥 /addacc (admin) — Thêm acc vào kho bằng reply  
+💵 /addmoney <id> <số tiền> (admin)  
+""")
 
-    if bal < PRICE_RANDOM:
-        return bot.reply_to(msg,f"❗ Bạn còn {bal}đ, thiếu {PRICE_RANDOM-bal}đ\nDùng /nap để nạp")
+# xem số dư
+@bot.message_handler(commands=['balance'])
+def bal(m):
+    bot.reply_to(m, f"💰 Số dư: {get_balance(m.from_user.id)}đ")
 
-    cur.execute("SELECT id,data FROM accounts ORDER BY RANDOM() LIMIT 1")
-    acc = cur.fetchone()
+# nạp tiền
+@bot.message_handler(commands=['nap'])
+def nap(m):
+    bot.send_message(m.chat.id,
+"""
+💳 *Hướng dẫn nạp tiền*
 
+Chuyển khoản:
+
+- STK: 0971487462
+- MB BANK
+- Nội dung: NAP {id_user}
+- Số tiền: tùy ý
+
+📸 Sau khi chuyển, gửi ảnh hóa đơn vào bot — admin sẽ duyệt & cộng tiền.
+""".replace("{id_user}", str(m.from_user.id)))
+
+# BOT NHẬN ẢNH BILL & GỬI ADMIN DUYỆT
+@bot.message_handler(content_types=['photo'])
+def bill(m):
+    uid = m.from_user.id
+    caption = f"🧾 Bill nạp tiền\nUser: {uid}\nReply tin này + số tiền để duyệt."
+    bot.send_photo(ADMIN_ID, m.photo[-1].file_id, caption=caption)
+    bot.reply_to(m,"📨 Đã gửi yêu cầu, vui lòng đợi admin duyệt.")
+
+# Admin thêm tiền
+@bot.message_handler(commands=['addmoney'])
+def addmoney(m):
+    if m.from_user.id!=ADMIN_ID: return
+    try:
+        _, uid, amount = m.text.split()
+        add_balance(int(uid), int(amount))
+        bot.reply_to(m,"✔ Đã cộng tiền")
+    except:
+        bot.reply_to(m,"❗ Format: /addmoney <id> <số tiền>")
+
+# Admin thêm acc qua reply
+@bot.message_handler(commands=['addacc'])
+def addacc(m):
+    if m.from_user.id!=ADMIN_ID:
+        return bot.reply_to(m,"Bạn không phải admin.")
+
+    if not m.reply_to_message:
+        return bot.reply_to(m,"Reply tin nhắn chứa acc dạng:\n`user|pass`")
+
+    acc = m.reply_to_message.text.strip()
+    with open("acc.txt","a",encoding="utf-8") as f: f.write(acc+"\n")
+
+    bot.reply_to(m,"✔ Đã thêm vào kho acc.")
+
+# mua acc
+@bot.message_handler(commands=['buy'])
+def buy(m):
+    try:
+        price = int(m.text.split()[1])
+    except:
+        return bot.reply_to(m,"❗ Dùng: /buy <giá>")
+
+    uid=m.from_user.id
+    bal=get_balance(uid)
+    if bal < price:
+        return bot.reply_to(m,"💸 Không đủ tiền!")
+
+    acc=get_account()
     if not acc:
-        return bot.reply_to(msg,"❗ Hết acc, hãy đợi admin thêm!")
+        return bot.reply_to(m,"❗ Hết hàng!")
 
-    reduce_balance(uid,PRICE_RANDOM)
-    cur.execute("DELETE FROM accounts WHERE id=?", (acc[0],))
-    db.commit()
+    set_balance(uid, bal-price)
+    bot.reply_to(m, f"🎉 Mua thành công!\nTài khoản: `{acc}`\nSố dư còn: {bal-price}đ", parse_mode="Markdown")
 
-    bot.reply_to(msg,
-f"""🎉 Mua thành công Acc Random Liên Quân!
-
-🔑 Thông tin:
-`{acc[1]}`
-
-💰 Số dư còn: {get_balance(uid)}đ
-""",parse_mode="Markdown")
-
-
-# ================== ADMIN ADD ACC ==================
-@bot.message_handler(commands=["addacc"])
-def addacc(msg):
-    if msg.from_user.id != ADMIN_ID:
-        return
-
-    data = msg.text.replace("/addacc ","")
-    if "|" not in data:
-        return bot.reply_to(msg,"Gõ dạng: /addacc user|pass")
-
-    cur.execute("INSERT INTO accounts(data)VALUES(?)",(data,))
-    db.commit()
-    bot.reply_to(msg,"✔ Đã thêm acc vào kho")
-
-
-# ================== CHECK ACC ==================
-@bot.message_handler(commands=["check"])
-def check(msg):
-    cur.execute("SELECT COUNT(*) FROM accounts")
-    total = cur.fetchone()[0]
-    bot.reply_to(msg,f"📦 Kho còn: {total} acc")
-
-
-# ================== RUN BOT ==================
-keep_alive()            # giữ bot sống khi deploy Render/railway
-bot.polling(none_stop=True)
+print("BOT RUNNING...")
+bot.infinity_polling()
