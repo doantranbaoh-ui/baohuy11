@@ -1,7 +1,9 @@
 import os
 import json
 import time
+import shutil
 import asyncio
+from datetime import datetime
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from keep_alive import keep_alive  # chống sleep bot
@@ -9,14 +11,17 @@ from keep_alive import keep_alive  # chống sleep bot
 # ============================
 # CONFIG
 # ============================
-TOKEN = "6367532329:AAEyb8Uyot8Zj-wBbAyy-ZjJpt4JIeIKGvY"  # <-- Thay bằng token của bạn
+TOKEN = "6367532329:AAEyb8Uyot8Zj-wBbAyy-ZjJpt4JIeIKGvY"
 ADMIN_ID = 5736655322
 DATA_FOLDER = "data"
+BACKUP_FOLDER = os.path.join(DATA_FOLDER, "backup")
 ACC_FILE = os.path.join(DATA_FOLDER, "acc.txt")
 SOLD_FILE = os.path.join(DATA_FOLDER, "sold_acc.txt")
 USER_DATA = os.path.join(DATA_FOLDER, "users.json")
 
+# Tạo folder nếu chưa có
 os.makedirs(DATA_FOLDER, exist_ok=True)
+os.makedirs(BACKUP_FOLDER, exist_ok=True)
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
@@ -48,14 +53,14 @@ users = load_users()
 def get_balance(uid):
     uid = str(uid)
     if uid not in users:
-        users[uid] = {"balance": 0}  # tự động tạo user mới
+        users[uid] = {"balance": 0}
         save_users(users)
     return users[uid]["balance"]
 
 def add_balance(uid, amount):
     uid = str(uid)
     if uid not in users:
-        users[uid] = {"balance": 0}  # tự động tạo user mới
+        users[uid] = {"balance": 0}
     users[uid]["balance"] += amount
     save_users(users)
 
@@ -91,6 +96,25 @@ def get_sold_acc_list():
         return [line.strip() for line in f if line.strip()]
 
 # ============================
+# BACKUP SYSTEM
+# ============================
+def backup_file(file_path):
+    if os.path.exists(file_path):
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = os.path.basename(file_path)
+        backup_path = os.path.join(BACKUP_FOLDER, f"{filename}_{timestamp}.bak")
+        shutil.copy(file_path, backup_path)
+        print(f"[BACKUP] {file_path} -> {backup_path}")
+
+async def daily_backup():
+    while True:
+        backup_file(USER_DATA)
+        backup_file(ACC_FILE)
+        backup_file(SOLD_FILE)
+        # Backup mỗi 24 giờ
+        await asyncio.sleep(24 * 3600)
+
+# ============================
 # NAP SYSTEM
 # ============================
 nap_requests = {}
@@ -104,7 +128,7 @@ async def handle_message(msg: types.Message):
     text = msg.text or ""
 
     if text.startswith("/start"):
-        _ = get_balance(uid)  # tự động tạo user mới nếu chưa có
+        _ = get_balance(uid)
         await msg.answer(
             "🎉 *SHOP RANDOM 2K AUTO*\n\n"
             "Lệnh sử dụng:\n"
@@ -224,6 +248,8 @@ async def deny_bill(callback: types.CallbackQuery):
 # ============================
 async def main():
     keep_alive()  # chống sleep
+    # Chạy backup song song
+    asyncio.create_task(daily_backup())
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
