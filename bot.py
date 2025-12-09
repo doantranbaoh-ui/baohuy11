@@ -4,12 +4,15 @@ import time
 import asyncio
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from keep_alive import keep_alive
+from keep_alive import keep_alive  # Chống sleep bot
 
 # ============================
 # CONFIG
 # ============================
-TOKEN = os.getenv("6367532329:AAEyb8Uyot8Zj-wBbAyy-ZjJpt4JIeIKGvY")  # Hoặc điền token trực tiếp
+TOKEN = os.getenv("6367532329:AAEyb8Uyot8Zj-wBbAyy-ZjJpt4JIeIKGvY")  # Đặt token Telegram bot qua biến môi trường
+if not TOKEN:
+    raise ValueError("Error: BOT_TOKEN environment variable is not set!")
+
 ADMIN_ID = 5736655322
 DATA_FOLDER = "data"
 ACC_FILE = os.path.join(DATA_FOLDER, "acc.txt")
