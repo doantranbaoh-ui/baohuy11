@@ -1,14 +1,2 @@
-python-telegram-bot
-python-dotenv
+aiogram
 Flask
-pytesseract
-Pillow
-pyTelegramBotAPI
-fastapi
-uvicorn
-gunicorn
-Werkzeug
-itsdangerous
-click
-Jinja2
-MarkupSafe
