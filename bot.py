@@ -5,6 +5,7 @@ import shutil
 import asyncio
 from datetime import datetime
 from aiogram import Bot, Dispatcher, types
+from aiogram.filters import Text, ContentType
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from keep_alive import keep_alive  # chống sleep bot
 
@@ -19,7 +20,6 @@ ACC_FILE = os.path.join(DATA_FOLDER, "acc.txt")
 SOLD_FILE = os.path.join(DATA_FOLDER, "sold_acc.txt")
 USER_DATA = os.path.join(DATA_FOLDER, "users.json")
 
-# Tạo folder nếu chưa có
 os.makedirs(DATA_FOLDER, exist_ok=True)
 os.makedirs(BACKUP_FOLDER, exist_ok=True)
 
@@ -30,11 +30,9 @@ dp = Dispatcher()
 # USER DATABASE
 # ============================
 def load_users():
-    if not os.path.exists(USER_DATA):
+    if not os.path.exists(USER_DATA) or os.stat(USER_DATA).st_size == 0:
         with open(USER_DATA, "w", encoding="utf-8") as f:
             json.dump({}, f, indent=4)
-        return {}
-    if os.stat(USER_DATA).st_size == 0:
         return {}
     with open(USER_DATA, "r", encoding="utf-8") as f:
         try:
@@ -111,8 +109,7 @@ async def daily_backup():
         backup_file(USER_DATA)
         backup_file(ACC_FILE)
         backup_file(SOLD_FILE)
-        # Backup mỗi 24 giờ
-        await asyncio.sleep(24 * 3600)
+        await asyncio.sleep(24 * 3600)  # Backup mỗi 24h
 
 # ============================
 # NAP SYSTEM
@@ -122,89 +119,94 @@ nap_requests = {}
 # ============================
 # COMMANDS
 # ============================
-@dp.message()
-async def handle_message(msg: types.Message):
+@dp.message(Text(startswith="/start"))
+async def cmd_start(msg: types.Message):
     uid = msg.from_user.id
-    text = msg.text or ""
+    _ = get_balance(uid)
+    await msg.answer(
+        "🎉 *SHOP RANDOM 2K AUTO*\n\n"
+        "Lệnh sử dụng:\n"
+        "📌 /balance – xem số dư\n"
+        "📌 /buy – mua acc 2.000đ\n"
+        "📌 /nap – hướng dẫn nạp tiền (20 phút hiệu lực)\n"
+        "📌 /addacc – admin thêm acc\n"
+        "📌 /listacc – xem acc chưa bán (admin)\n"
+        "📌 /soldacc – xem acc đã bán (admin)\n",
+        parse_mode="Markdown"
+    )
 
-    if text.startswith("/start"):
-        _ = get_balance(uid)
-        await msg.answer(
-            "🎉 *SHOP RANDOM 2K AUTO*\n\n"
-            "Lệnh sử dụng:\n"
-            "📌 /balance – xem số dư\n"
-            "📌 /buy – mua acc 2.000đ\n"
-            "📌 /nap – hướng dẫn nạp tiền (20 phút hiệu lực)\n"
-            "📌 /addacc – admin thêm acc\n"
-            "📌 /listacc – xem acc chưa bán (admin)\n"
-            "📌 /soldacc – xem acc đã bán (admin)\n",
-            parse_mode="Markdown"
-        )
-        return
+@dp.message(Text(startswith="/balance"))
+async def cmd_balance(msg: types.Message):
+    bal = get_balance(msg.from_user.id)
+    await msg.answer(f"💰 Số dư của bạn: *{bal}đ*", parse_mode="Markdown")
 
-    if text.startswith("/balance"):
-        bal = get_balance(uid)
-        await msg.answer(f"💰 Số dư của bạn: *{bal}đ*", parse_mode="Markdown")
-        return
+@dp.message(Text(startswith="/nap"))
+async def cmd_nap(msg: types.Message):
+    uid = msg.from_user.id
+    nap_requests[uid] = time.time()
+    await msg.answer(
+        f"💳 *HƯỚNG DẪN NẠP TIỀN*\n\n"
+        f"- STK: `0971487462`\n"
+        f"- Ngân hàng: MB Bank\n"
+        f"- Nội dung chuyển khoản: `NAP {uid}`\n"
+        f"- Số tiền tối thiểu: *10.000đ*\n\n"
+        f"📸 Bạn có 20 phút để gửi ảnh bill.",
+        parse_mode="Markdown"
+    )
 
-    if text.startswith("/nap"):
-        nap_requests[uid] = time.time()
-        await msg.answer(
-            f"💳 *HƯỚNG DẪN NẠP TIỀN*\n\n"
-            f"- STK: `0971487462`\n"
-            f"- Ngân hàng: MB Bank\n"
-            f"- Nội dung chuyển khoản: `NAP {uid}`\n"
-            f"- Số tiền tối thiểu: *10.000đ*\n\n"
-            f"📸 Bạn có 20 phút để gửi ảnh bill.",
-            parse_mode="Markdown"
-        )
-        return
+@dp.message(Text(startswith="/buy"))
+async def cmd_buy(msg: types.Message):
+    uid = msg.from_user.id
+    bal = get_balance(uid)
+    if bal < 2000:
+        return await msg.answer("❌ Bạn không đủ tiền. Gõ /nap để nạp thêm.")
+    acc = get_acc()
+    if not acc:
+        return await msg.answer("❌ SHOP HẾT ACC.\nVui lòng quay lại sau!")
+    add_balance(uid, -2000)
+    save_sold_acc(acc)
+    await msg.answer(
+        f"🎁 *MUA THÀNH CÔNG!*\n\n"
+        f"🔐 Acc của bạn:\n`{acc}`\n\n"
+        f"Chúc bạn may mắn!",
+        parse_mode="Markdown"
+    )
 
-    if text.startswith("/buy"):
-        bal = get_balance(uid)
-        if bal < 2000:
-            return await msg.answer("❌ Bạn không đủ tiền. Gõ /nap để nạp thêm.")
-        acc = get_acc()
-        if not acc:
-            return await msg.answer("❌ SHOP HẾT ACC.\nVui lòng quay lại sau!")
-        add_balance(uid, -2000)
-        save_sold_acc(acc)
-        await msg.answer(
-            f"🎁 *MUA THÀNH CÔNG!*\n\n"
-            f"🔐 Acc của bạn:\n`{acc}`\n\n"
-            f"Chúc bạn may mắn!",
-            parse_mode="Markdown"
-        )
+@dp.message(Text(startswith="/addacc"))
+async def cmd_addacc(msg: types.Message):
+    uid = msg.from_user.id
+    if uid != ADMIN_ID:
         return
+    try:
+        _, acc_raw = msg.text.split(" ", 1)
+    except:
+        return await msg.answer("❌ Sai cú pháp.\nDùng: /addacc user|pass")
+    with open(ACC_FILE, "a", encoding="utf-8") as f:
+        f.write(acc_raw.strip() + "\n")
+    await msg.answer(f"✅ Đã thêm acc:\n`{acc_raw}`", parse_mode="Markdown")
 
-    if text.startswith("/addacc") and uid == ADMIN_ID:
-        try:
-            _, acc_raw = text.split(" ", 1)
-        except:
-            return await msg.answer("❌ Sai cú pháp.\nDùng: /addacc user|pass")
-        with open(ACC_FILE, "a", encoding="utf-8") as f:
-            f.write(acc_raw.strip() + "\n")
-        await msg.answer(f"✅ Đã thêm acc:\n`{acc_raw}`", parse_mode="Markdown")
+@dp.message(Text(startswith="/listacc"))
+async def cmd_listacc(msg: types.Message):
+    if msg.from_user.id != ADMIN_ID:
         return
+    accs = get_acc_list()
+    if not accs:
+        return await msg.answer("📂 Kho acc trống!")
+    await msg.answer("📂 Acc chưa bán:\n" + "\n".join(accs))
 
-    if text.startswith("/listacc") and uid == ADMIN_ID:
-        accs = get_acc_list()
-        if not accs:
-            return await msg.answer("📂 Kho acc trống!")
-        await msg.answer("📂 Acc chưa bán:\n" + "\n".join(accs))
+@dp.message(Text(startswith="/soldacc"))
+async def cmd_soldacc(msg: types.Message):
+    if msg.from_user.id != ADMIN_ID:
         return
-
-    if text.startswith("/soldacc") and uid == ADMIN_ID:
-        accs = get_sold_acc_list()
-        if not accs:
-            return await msg.answer("📂 Chưa có acc nào bán!")
-        await msg.answer("📂 Acc đã bán:\n" + "\n".join(accs))
-        return
+    accs = get_sold_acc_list()
+    if not accs:
+        return await msg.answer("📂 Chưa có acc nào bán!")
+    await msg.answer("📂 Acc đã bán:\n" + "\n".join(accs))
 
 # ============================
 # HANDLE PHOTO (BILL)
 # ============================
-@dp.message(content_types=types.ContentType.PHOTO)
+@dp.message(ContentType.PHOTO)
 async def handle_photo(msg: types.Message):
     uid = msg.from_user.id
     now = time.time()
@@ -226,9 +228,9 @@ async def handle_photo(msg: types.Message):
     del nap_requests[uid]
 
 # ============================
-# CALLBACK QUERY (ADMIN DUYỆT/TỪ CHỐI)
+# CALLBACK QUERY
 # ============================
-@dp.callback_query(lambda c: c.data.startswith("accept_"))
+@dp.callback_query(Text(startswith="accept_"))
 async def accept_bill(callback: types.CallbackQuery):
     uid = int(callback.data.split("_")[1])
     add_balance(uid, 10000)
@@ -236,7 +238,7 @@ async def accept_bill(callback: types.CallbackQuery):
     await callback.message.edit_caption("✅ ĐÃ DUYỆT")
     await callback.answer("Đã duyệt.")
 
-@dp.callback_query(lambda c: c.data.startswith("deny_"))
+@dp.callback_query(Text(startswith="deny_"))
 async def deny_bill(callback: types.CallbackQuery):
     uid = int(callback.data.split("_")[1])
     await bot.send_message(uid, "❌ Bill của bạn đã bị từ chối.")
@@ -248,7 +250,6 @@ async def deny_bill(callback: types.CallbackQuery):
 # ============================
 async def main():
     keep_alive()  # chống sleep
-    # Chạy backup song song
     asyncio.create_task(daily_backup())
     await dp.start_polling(bot)
 
