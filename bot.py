@@ -5,7 +5,7 @@ import shutil
 import asyncio
 from datetime import datetime
 from aiogram import Bot, Dispatcher, types
-from aiogram.filters import Text, ContentType
+from aiogram.filters import Command, ContentType
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from keep_alive import keep_alive  # chống sleep bot
 
@@ -119,7 +119,7 @@ nap_requests = {}
 # ============================
 # COMMANDS
 # ============================
-@dp.message(Text(startswith="/start"))
+@dp.message(Command("start"))
 async def cmd_start(msg: types.Message):
     uid = msg.from_user.id
     _ = get_balance(uid)
@@ -135,12 +135,12 @@ async def cmd_start(msg: types.Message):
         parse_mode="Markdown"
     )
 
-@dp.message(Text(startswith="/balance"))
+@dp.message(Command("balance"))
 async def cmd_balance(msg: types.Message):
     bal = get_balance(msg.from_user.id)
     await msg.answer(f"💰 Số dư của bạn: *{bal}đ*", parse_mode="Markdown")
 
-@dp.message(Text(startswith="/nap"))
+@dp.message(Command("nap"))
 async def cmd_nap(msg: types.Message):
     uid = msg.from_user.id
     nap_requests[uid] = time.time()
@@ -154,7 +154,7 @@ async def cmd_nap(msg: types.Message):
         parse_mode="Markdown"
     )
 
-@dp.message(Text(startswith="/buy"))
+@dp.message(Command("buy"))
 async def cmd_buy(msg: types.Message):
     uid = msg.from_user.id
     bal = get_balance(uid)
@@ -172,7 +172,7 @@ async def cmd_buy(msg: types.Message):
         parse_mode="Markdown"
     )
 
-@dp.message(Text(startswith="/addacc"))
+@dp.message(Command("addacc"))
 async def cmd_addacc(msg: types.Message):
     uid = msg.from_user.id
     if uid != ADMIN_ID:
@@ -185,7 +185,7 @@ async def cmd_addacc(msg: types.Message):
         f.write(acc_raw.strip() + "\n")
     await msg.answer(f"✅ Đã thêm acc:\n`{acc_raw}`", parse_mode="Markdown")
 
-@dp.message(Text(startswith="/listacc"))
+@dp.message(Command("listacc"))
 async def cmd_listacc(msg: types.Message):
     if msg.from_user.id != ADMIN_ID:
         return
@@ -194,7 +194,7 @@ async def cmd_listacc(msg: types.Message):
         return await msg.answer("📂 Kho acc trống!")
     await msg.answer("📂 Acc chưa bán:\n" + "\n".join(accs))
 
-@dp.message(Text(startswith="/soldacc"))
+@dp.message(Command("soldacc"))
 async def cmd_soldacc(msg: types.Message):
     if msg.from_user.id != ADMIN_ID:
         return
@@ -230,7 +230,7 @@ async def handle_photo(msg: types.Message):
 # ============================
 # CALLBACK QUERY
 # ============================
-@dp.callback_query(Text(startswith="accept_"))
+@dp.callback_query(lambda c: c.data.startswith("accept_"))
 async def accept_bill(callback: types.CallbackQuery):
     uid = int(callback.data.split("_")[1])
     add_balance(uid, 10000)
@@ -238,7 +238,7 @@ async def accept_bill(callback: types.CallbackQuery):
     await callback.message.edit_caption("✅ ĐÃ DUYỆT")
     await callback.answer("Đã duyệt.")
 
-@dp.callback_query(Text(startswith="deny_"))
+@dp.callback_query(lambda c: c.data.startswith("deny_"))
 async def deny_bill(callback: types.CallbackQuery):
     uid = int(callback.data.split("_")[1])
     await bot.send_message(uid, "❌ Bill của bạn đã bị từ chối.")
