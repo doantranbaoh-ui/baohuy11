@@ -4,15 +4,12 @@ import time
 import asyncio
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from keep_alive import keep_alive  # Chống sleep bot
+from keep_alive import keep_alive  # chống sleep bot
 
 # ============================
 # CONFIG
 # ============================
-TOKEN = os.getenv("6367532329:AAEyb8Uyot8Zj-wBbAyy-ZjJpt4JIeIKGvY")  # Đặt token Telegram bot qua biến môi trường
-if not TOKEN:
-    raise ValueError("Error: BOT_TOKEN environment variable is not set!")
-
+TOKEN = "6367532329:AAEyb8Uyot8Zj-wBbAyy-ZjJpt4JIeIKGvY"  # <-- Thay bằng token của bạn
 ADMIN_ID = 5736655322
 DATA_FOLDER = "data"
 ACC_FILE = os.path.join(DATA_FOLDER, "acc.txt")
@@ -93,7 +90,6 @@ async def handle_message(msg: types.Message):
     uid = msg.from_user.id
     text = msg.text or ""
 
-    # ===== START =====
     if text.startswith("/start"):
         add_balance(uid, 0)
         await msg.answer(
@@ -109,13 +105,11 @@ async def handle_message(msg: types.Message):
         )
         return
 
-    # ===== BALANCE =====
     if text.startswith("/balance"):
         bal = get_balance(uid)
         await msg.answer(f"💰 Số dư của bạn: *{bal}đ*", parse_mode="Markdown")
         return
 
-    # ===== NAP =====
     if text.startswith("/nap"):
         nap_requests[uid] = time.time()
         await msg.answer(
@@ -129,7 +123,6 @@ async def handle_message(msg: types.Message):
         )
         return
 
-    # ===== BUY =====
     if text.startswith("/buy"):
         bal = get_balance(uid)
         if bal < 2000:
@@ -147,7 +140,6 @@ async def handle_message(msg: types.Message):
         )
         return
 
-    # ===== ADMIN ADD ACC =====
     if text.startswith("/addacc") and uid == ADMIN_ID:
         try:
             _, acc_raw = text.split(" ", 1)
@@ -158,7 +150,6 @@ async def handle_message(msg: types.Message):
         await msg.answer(f"✅ Đã thêm acc:\n`{acc_raw}`", parse_mode="Markdown")
         return
 
-    # ===== ADMIN LIST ACC =====
     if text.startswith("/listacc") and uid == ADMIN_ID:
         accs = get_acc_list()
         if not accs:
@@ -166,7 +157,6 @@ async def handle_message(msg: types.Message):
         await msg.answer("📂 Acc chưa bán:\n" + "\n".join(accs))
         return
 
-    # ===== ADMIN SOLD ACC =====
     if text.startswith("/soldacc") and uid == ADMIN_ID:
         accs = get_sold_acc_list()
         if not accs:
