@@ -26,23 +26,36 @@ dp = Dispatcher()
 # ============================
 def load_users():
     if not os.path.exists(USER_DATA):
+        with open(USER_DATA, "w", encoding="utf-8") as f:
+            json.dump({}, f, indent=4)
+        return {}
+    if os.stat(USER_DATA).st_size == 0:
         return {}
     with open(USER_DATA, "r", encoding="utf-8") as f:
-        return json.load(f)
+        try:
+            return json.load(f)
+        except json.JSONDecodeError:
+            with open(USER_DATA, "w", encoding="utf-8") as fw:
+                json.dump({}, fw, indent=4)
+            return {}
 
 def save_users(data):
     with open(USER_DATA, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=4)
+        json.dump(data, f, indent=4, ensure_ascii=False)
 
 users = load_users()
 
 def get_balance(uid):
-    return users.get(str(uid), {"balance": 0})["balance"]
+    uid = str(uid)
+    if uid not in users:
+        users[uid] = {"balance": 0}  # tự động tạo user mới
+        save_users(users)
+    return users[uid]["balance"]
 
 def add_balance(uid, amount):
     uid = str(uid)
     if uid not in users:
-        users[uid] = {"balance": 0}
+        users[uid] = {"balance": 0}  # tự động tạo user mới
     users[uid]["balance"] += amount
     save_users(users)
 
@@ -91,7 +104,7 @@ async def handle_message(msg: types.Message):
     text = msg.text or ""
 
     if text.startswith("/start"):
-        add_balance(uid, 0)
+        _ = get_balance(uid)  # tự động tạo user mới nếu chưa có
         await msg.answer(
             "🎉 *SHOP RANDOM 2K AUTO*\n\n"
             "Lệnh sử dụng:\n"
