@@ -1,4 +1,4 @@
 aiogram
-flask
-fastapi
-uvicorn
+aiohttp
+async-timeout
+python-dotenv
