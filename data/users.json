@@ -1,9 +1,8 @@
 def load_users():
     if not os.path.exists(USER_DATA):
         return {}
-    try:
-        with open(USER_DATA, "r", encoding="utf-8") as f:
+    with open(USER_DATA, "r", encoding="utf-8") as f:
+        try:
             return json.load(f)
-    except json.JSONDecodeError:
-        # Nếu file trống hoặc hỏng → trả về dict rỗng
-        return {}
+        except json.JSONDecodeError:
+            return {}  # Nếu file trống hoặc lỗi JSON, trả về dict rỗng
