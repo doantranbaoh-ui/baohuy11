@@ -1,19 +1,33 @@
 import asyncio
 from aiogram import Bot, Dispatcher
 from config import TOKEN
-from commands import router as cmd_router
+from keep_alive import keep_alive  # Nếu bạn muốn chống sleep
+from commands import router as commands_router
 from nap import router as nap_router
-from keep_alive import keep_alive
 
+# ==============================
+# CHẠY BOT
+# ==============================
 async def main():
-    bot=Bot(TOKEN)
-    dp=Dispatcher()
+    print("🚀 Bot đang khởi động...")
 
-    dp.include_router(cmd_router)
-    dp.include_router(nap_router)
+    bot = Bot(token=TOKEN)
+    dp = Dispatcher()
 
-    keep_alive()         # nếu chạy Render/Replit
+    # Gắn module lệnh vào bot
+    dp.include_router(commands_router)   # /start /buy /addacc /listacc ...
+    dp.include_router(nap_router)        # /nap + xử lý bill duyệt
+
+    # Chạy keep_alive nếu deploy Render/Replit
+    try:
+        keep_alive()
+        print("🌍 Web server KeepAlive đã chạy...")
+    except:
+        print("⚠ Không tìm thấy keep_alive.py (bỏ qua nếu chạy VPS)")
+
+    # Bắt đầu polling bot
     await dp.start_polling(bot)
 
-if __name__=="__main__":
+
+if __name__ == "__main__":
     asyncio.run(main())
