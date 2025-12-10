@@ -1,78 +1,72 @@
+# database.py
 import os
 import json
-from config import USER_FILE, DATA_FOLDER
+from typing import Dict, Any
+from config import USERS_FILE, DATA_FOLDER
 
-# ==========================
-# TẠO THƯ MỤC & FILE NẾU CHƯA CÓ
-# ==========================
 os.makedirs(DATA_FOLDER, exist_ok=True)
 
-# Nếu users.json chưa tồn tại → tạo mới
-if not os.path.exists(USER_FILE):
-    with open(USER_FILE, "w", encoding="utf-8") as f:
+if not os.path.exists(USERS_FILE):
+    with open(USERS_FILE, "w", encoding="utf-8") as f:
         f.write("{}")
 
-
-# ==========================
-# LOAD & SAVE USER DATA
-# ==========================
-def load_users():
+def _load() -> Dict[str, Any]:
     try:
-        with open(USER_FILE, "r", encoding="utf-8") as f:
+        with open(USERS_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    except:
-        # Nếu file lỗi → reset lại file sạch
-        with open(USER_FILE, "w", encoding="utf-8") as f:
+    except Exception:
+        with open(USERS_FILE, "w", encoding="utf-8") as f:
             f.write("{}")
         return {}
 
+def _save(data: Dict[str, Any]):
+    os.makedirs(DATA_FOLDER, exist_ok=True)
+    with open(USERS_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
-def save_users(data: dict):
-    with open(USER_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=4, ensure_ascii=False)
+# Public API
+def ensure_user(uid: int):
+    users = _load()
+    k = str(uid)
+    if k not in users:
+        users[k] = {"balance": 0, "history": []}
+        _save(users)
 
+def get_balance(uid: int) -> int:
+    users = _load()
+    return users.get(str(uid), {}).get("balance", 0)
 
-# ==========================
-# KHỞI TẠO DATABASE VÀO BIẾN
-# ==========================
-users = load_users()
+def add_balance(uid: int, amount: int, reason: str = ""):
+    users = _load()
+    k = str(uid)
+    if k not in users:
+        users[k] = {"balance": 0, "history": []}
+    users[k]["balance"] = users[k].get("balance", 0) + int(amount)
+    if reason:
+        users[k].setdefault("history", []).append({"action": "add", "amount": int(amount), "reason": reason})
+    _save(users)
 
-
-# ==========================
-# HANDLE SỐ DƯ
-# ==========================
-def get_balance(uid):
-    uid = str(uid)
-    if uid not in users:
-        users[uid] = {"balance": 0}
-        save_users(users)
-    return users[uid]["balance"]
-
-
-def add_balance(uid, amount: int):
-    uid = str(uid)
-    if uid not in users:
-        users[uid] = {"balance": 0}
-    users[uid]["balance"] += amount
-    save_users(users)
-
-
-# ==========================
-# TRỪ TIỀN
-# ==========================
-def reduce_balance(uid, amount: int):
-    uid = str(uid)
-    if uid not in users:
-        users[uid] = {"balance": 0}
-    if users[uid]["balance"] >= amount:
-        users[uid]["balance"] -= amount
-        save_users(users)
+def reduce_balance(uid: int, amount: int, reason: str = "") -> bool:
+    users = _load()
+    k = str(uid)
+    if k not in users:
+        users[k] = {"balance": 0, "history": []}
+    if users[k].get("balance", 0) >= int(amount):
+        users[k]["balance"] -= int(amount)
+        if reason:
+            users[k].setdefault("history", []).append({"action": "reduce", "amount": int(amount), "reason": reason})
+        _save(users)
         return True
     return False
 
+def add_history(uid: int, item: dict):
+    users = _load()
+    k = str(uid)
+    if k not in users:
+        users[k] = {"balance": 0, "history": []}
+    users[k].setdefault("history", []).append(item)
+    _save(users)
 
-# ==========================
-# LẤY TOÀN BỘ USER
-# ==========================
-def all_users():
-    return users
+def get_history(uid: int):
+    users = _load()
+    return users.get(str(uid), {}).get("history", [])
