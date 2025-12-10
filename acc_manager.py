@@ -1,51 +1,36 @@
-# acc_manager.py
-import os
-import shutil
-from datetime import datetime
-from typing import List, Optional
-from config import ACC_FILE, SOLD_FILE, BACKUP_FOLDER
+from aiogram import Router, types
+from config import ADMINS
+from database import get_balance, add_balance, add_history
 
-# ensure files/folders
-os.makedirs(os.path.dirname(ACC_FILE), exist_ok=True)
-os.makedirs(BACKUP_FOLDER, exist_ok=True)
-for f in (ACC_FILE, SOLD_FILE):
-    if not os.path.exists(f):
-        open(f, "a", encoding="utf-8").close()
+router = Router()
 
-def list_accs() -> List[str]:
-    with open(ACC_FILE, "r", encoding="utf-8") as f:
-        return [l.strip() for l in f if l.strip()]
+ACC_FILE = "data/acc.txt"
+SOLD = "data/sold_acc.txt"
 
-def list_sold() -> List[str]:
-    with open(SOLD_FILE, "r", encoding="utf-8") as f:
-        return [l.strip() for l in f if l.strip()]
+@router.message(commands=["addacc"])
+async def add_acc(msg: types.Message):
+    if msg.from_user.id not in ADMINS:
+        return await msg.answer("Bạn không phải admin")
+    acc = msg.text.replace("/addacc ", "")
+    with open(ACC_FILE, "a") as f: f.write(acc+"\n")
+    await msg.answer("✔ Đã thêm acc")
 
-def add_accs_from_text(text: str) -> int:
-    lines = [l.strip() for l in text.splitlines() if l.strip()]
-    if not lines:
-        return 0
-    with open(ACC_FILE, "a", encoding="utf-8") as f:
-        for l in lines:
-            f.write(l + "\n")
-    return len(lines)
+@router.message(commands=["acc"])
+async def list_acc(msg: types.Message):
+    if not open(ACC_FILE).read().strip():
+        return await msg.answer("⚠ Hết hàng")
+    await msg.answer(open(ACC_FILE).read())
 
-def pop_acc() -> Optional[str]:
-    accs = list_accs()
-    if not accs:
-        return None
-    acc = accs.pop(0)
-    with open(ACC_FILE, "w", encoding="utf-8") as f:
-        if accs:
-            f.write("\n".join(accs) + "\n")
-    with open(SOLD_FILE, "a", encoding="utf-8") as f:
-        f.write(acc + "\n")
-    return acc
+@router.message(commands=["mua"])
+async def buy(msg: types.Message):
+    price = 10000
+    bal = get_balance(msg.from_user.id)
+    if bal < price: return await msg.answer("❌ Không đủ tiền")
 
-def backup_files():
-    t = datetime.now().strftime("%Y%m%d_%H%M%S")
-    for path in (ACC_FILE, SOLD_FILE):
-        if os.path.exists(path):
-            try:
-                shutil.copy(path, os.path.join(BACKUP_FOLDER, os.path.basename(path) + "_" + t + ".bak"))
-            except Exception:
-                pass
+    lines = open(ACC_FILE).read().splitlines()
+    acc = lines[0]
+    open(ACC_FILE, "w").write("\n".join(lines[1:]))
+    open(SOLD, "a").write(acc+"\n")
+    add_balance(msg.from_user.id, -price)
+    add_history(msg.from_user.id, f"Mua acc {acc}")
+    await msg.answer(f"🛒 Acc của bạn:\n`{acc}`", parse_mode="markdown")
