@@ -1,8 +1,15 @@
-TOKEN = "6367532329:AAEyb8Uyot8Zj-wBbAyy-ZjJpt4JIeIKGvY"
-ADMIN_ID = 5736655322   # chỉ 1 admin
+# config.py
+TOKEN = "6367532329:AAFDbKOG4-I8pxo66gF3PPBBzVuxr5xnFUY"
+# List admin ids, ví dụ: [5736655322, 123456789]
+ADMINS = [5736655322]
 
+# Data files
 DATA_FOLDER = "data"
-USER_FILE = f"{DATA_FOLDER}/users.json"
-ACC_FILE = f"{DATA_FOLDER}/acc.txt"
-SOLD_FILE = f"{DATA_FOLDER}/sold_acc.txt"
-BACKUP_FOLDER = f"{DATA_FOLDER}/backup"
+USERS_FILE = DATA_FOLDER + "/users.json"
+PENDING_FILE = DATA_FOLDER + "/pending.json"
+ACC_FILE = DATA_FOLDER + "/acc.txt"
+SOLD_FILE = DATA_FOLDER + "/sold_acc.txt"
+BACKUP_FOLDER = DATA_FOLDER + "/backup"
+
+# Shop settings
+PRICE_PER_ACC = 2000  # giá 1 acc (đ)
