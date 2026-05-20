@@ -1,8 +1,3 @@
-aiogram
-python-dotenv
-aiohttp
+pyTelegramBotAPI
 requests
-fastapi
-uvicorn
-python-telegram-bot
-Flask
+flask
