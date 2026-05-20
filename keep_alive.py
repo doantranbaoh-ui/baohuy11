@@ -1,20 +1,18 @@
-# keep_alive.py
+from threading import Thread
+from flask import Flask
+
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "Bot đang chạy ngon lành! 🚀"
+
+def run_web_server():
+    # Khởi chạy Flask ở cổng 8080
+    app.run(host='0.0.0.0', port=8080)
+
 def keep_alive():
-    try:
-        from fastapi import FastAPI
-        import uvicorn
-        from threading import Thread
-    except Exception:
-        return
-
-    app = FastAPI()
-
-    @app.get("/")
-    def home():
-        return {"status": "baohuy day"}
-
-    def _run():
-        uvicorn.run(app, host="0.0.0.0", port=8080, log_level="warning")
-
-    t = Thread(target=_run, daemon=True)
+    """Hàm khởi chạy Web Server trên một luồng phụ tách biệt với Bot"""
+    t = Thread(target=run_web_server)
+    t.daemon = True
     t.start()
