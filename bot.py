@@ -1,17 +1,23 @@
 import telebot
 import requests
 import time
-import urllib.parse
 import os
+import urllib.parse
 from keep_alive import keep_alive
 
-TOKEN = os.getenv("8080338995:AAEXOZr1duwHWqmBBciXvmeHFHaiuOTvayE")  # đặt biến môi trường
+# Lấy token từ Render Environment
+TOKEN = os.getenv("8080338995:AAEXOZr1duwHWqmBBciXvmeHFHaiuOTvayE")
+
+if not TOKEN:
+    raise Exception(
+        "❌ Chưa thêm BOT_TOKEN trong Render Environment"
+    )
 
 bot = telebot.TeleBot(TOKEN)
 
 keep_alive()
 
-print("✅ Bot đang hoạt động")
+print("✅ Bot đang hoạt động...")
 
 
 @bot.message_handler(commands=['start'])
@@ -37,9 +43,11 @@ def like(message):
     try:
 
         start_time = time.time()
+
         args = message.text.split(maxsplit=1)
 
         if len(args) < 2:
+
             bot.reply_to(
                 message,
                 "❌ Thiếu link TikTok"
@@ -48,7 +56,15 @@ def like(message):
 
         url = args[1].strip()
 
-        msg = bot.reply_to(
+        if "tiktok" not in url:
+
+            bot.reply_to(
+                message,
+                "❌ Link TikTok không hợp lệ"
+            )
+            return
+
+        loading = bot.reply_to(
             message,
             "⏳ Đang xử lý..."
         )
@@ -56,8 +72,8 @@ def like(message):
         encoded_url = urllib.parse.quote(url)
 
         api = (
-            f"https://tiktokvm.vercel.app/api/likes"
-            f"?url={encoded_url}"
+            "https://tiktokvm.vercel.app"
+            f"/api/likes?url={encoded_url}"
         )
 
         response = requests.get(
@@ -66,18 +82,42 @@ def like(message):
         )
 
         if response.status_code != 200:
+
             raise Exception(
                 f"API lỗi: {response.status_code}"
             )
 
         data = response.json()
 
-        username = data.get("username","Không rõ")
-        uid = data.get("uid","Không rõ")
-        nickname = data.get("nickname","Không rõ")
+        username = data.get(
+            "username",
+            "Không rõ"
+        )
 
-        before = int(data.get("before",0))
-        added = int(data.get("added",0))
+        uid = data.get(
+            "uid",
+            "Không rõ"
+        )
+
+        nickname = data.get(
+            "nickname",
+            "Không rõ"
+        )
+
+        before = int(
+            data.get(
+                "before",
+                0
+            )
+        )
+
+        added = int(
+            data.get(
+                "added",
+                0
+            )
+        )
+
         after = int(
             data.get(
                 "after",
@@ -92,7 +132,7 @@ def like(message):
 
         result = f"""
 ╔══════════════════╗
- ✨ BUFF TYM THÀNH CÔNG ✨
+   ✨ BUFF TYM THÀNH CÔNG ✨
 ╚══════════════════╝
 
 👤 Tài khoản: {username}
@@ -108,16 +148,19 @@ def like(message):
 ━━━━━━━━━━━━━━
 
 ⚡ Tốc độ: {speed}s
-🕒 Time: {time.strftime("%H:%M:%S | %d/%m/%Y")}
+🕒 Time:
+{time.strftime("%H:%M:%S | %d/%m/%Y")}
 
-✅️ Video đã được xử lý thành công!
+📡 Trạng thái: Hoạt động
+
+✅️ Video đã được buff thành công!
 🚀 Cảm ơn đã sử dụng bot
 """
 
         bot.edit_message_text(
             result,
             chat_id=message.chat.id,
-            message_id=msg.message_id
+            message_id=loading.message_id
         )
 
     except Exception as e:
@@ -126,6 +169,8 @@ def like(message):
             message.chat.id,
             f"❌ Lỗi:\n{e}"
         )
+
+        print(e)
 
 
 bot.infinity_polling(
