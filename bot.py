@@ -3,13 +3,17 @@ import urllib.parse
 import telebot
 import requests
 from requests.exceptions import RequestException, Timeout
+# Gọi hàm keep_alive từ file keep_alive.py kế bên
+from keep_alive import keep_alive
 
-# Dán trực tiếp Token của bạn vào đây để chạy nhanh
+# Token cấu hình trực tiếp của bạn
 TOKEN = "8080338995:AAEXOZr1duwHWqmBBciXvmeHFHaiuOTvayE"
-
 bot = telebot.TeleBot(TOKEN)
 
-print("✅ Bot đang hoạt động...")
+# Kích hoạt hệ thống giữ sống Web Server trước
+keep_alive()
+print("✅ Hệ thống Keep-Alive độc lập đã khởi động!")
+print("✅ Bot Telegram đang hoạt động...")
 
 
 @bot.message_handler(commands=['start'])
@@ -29,7 +33,7 @@ Ví dụ:
 @bot.message_handler(commands=['like'])
 def like(message):
     start_time = time.time()
-    loading = None  # Khởi tạo trước để tránh lỗi hệ thống
+    loading = None
 
     try:
         args = message.text.split(maxsplit=1)
@@ -44,13 +48,11 @@ def like(message):
             bot.reply_to(message, "❌ Link TikTok không hợp lệ")
             return
 
-        # Gửi tin nhắn chờ xử lý
         loading = bot.reply_to(message, "⏳ Đang gửi yêu cầu lên hệ thống...")
 
         encoded = urllib.parse.quote(url)
         api = f"https://tiktokvm.vercel.app/api/likes?url={encoded}"
 
-        # Thực hiện request đến API
         response = requests.get(api, timeout=20)
 
         if response.status_code != 200:
@@ -58,7 +60,6 @@ def like(message):
 
         data = response.json()
 
-        # Hàm xử lý số an toàn tránh crash bot
         def safe_int(value, default=0):
             try:
                 return int(value) if value is not None and str(value).isdigit() else default
@@ -117,7 +118,6 @@ def like(message):
 
 
 def handle_error(message, loading_msg, error_text):
-    """Hàm xử lý hiển thị lỗi mượt mà cho người dùng"""
     print(f" LOG LỖI: {error_text}")
     if loading_msg:
         try:
