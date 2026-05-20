@@ -1,134 +1,79 @@
+import time
+import urllib.parse
 import telebot
 import requests
-import time
-import os
-import urllib.parse
-from keep_alive import keep_alive
+from requests.exceptions import RequestException, Timeout
 
-# Lấy token từ Render Environment
-TOKEN = os.getenv("8080338995:AAEXOZr1duwHWqmBBciXvmeHFHaiuOTvayE")
-
-if not TOKEN:
-    raise Exception(
-        "❌ Chưa thêm BOT_TOKEN trong Render Environment"
-    )
+# Dán trực tiếp Token của bạn vào đây để chạy nhanh
+TOKEN = "8080338995:AAEXOZr1duwHWqmBBciXvmeHFHaiuOTvayE"
 
 bot = telebot.TeleBot(TOKEN)
-
-keep_alive()
 
 print("✅ Bot đang hoạt động...")
 
 
 @bot.message_handler(commands=['start'])
 def start(message):
-
     text = """
 ✨ BOT BUFF TYM TIKTOK ✨
 
 📌 Cách dùng:
-
 /like link_tiktok
 
 Ví dụ:
 /like https://vt.tiktok.com/xxxxx
 """
-
     bot.reply_to(message, text)
 
 
 @bot.message_handler(commands=['like'])
 def like(message):
+    start_time = time.time()
+    loading = None  # Khởi tạo trước để tránh lỗi hệ thống
 
     try:
-
-        start_time = time.time()
-
         args = message.text.split(maxsplit=1)
 
         if len(args) < 2:
-
-            bot.reply_to(
-                message,
-                "❌ Thiếu link TikTok"
-            )
+            bot.reply_to(message, "❌ Vui lòng nhập link TikTok")
             return
 
         url = args[1].strip()
 
-        if "tiktok" not in url:
-
-            bot.reply_to(
-                message,
-                "❌ Link TikTok không hợp lệ"
-            )
+        if "tiktok" not in url.lower():
+            bot.reply_to(message, "❌ Link TikTok không hợp lệ")
             return
 
-        loading = bot.reply_to(
-            message,
-            "⏳ Đang xử lý..."
-        )
+        # Gửi tin nhắn chờ xử lý
+        loading = bot.reply_to(message, "⏳ Đang gửi yêu cầu lên hệ thống...")
 
-        encoded_url = urllib.parse.quote(url)
+        encoded = urllib.parse.quote(url)
+        api = f"https://tiktokvm.vercel.app/api/likes?url={encoded}"
 
-        api = (
-            "https://tiktokvm.vercel.app"
-            f"/api/likes?url={encoded_url}"
-        )
-
-        response = requests.get(
-            api,
-            timeout=30
-        )
+        # Thực hiện request đến API
+        response = requests.get(api, timeout=20)
 
         if response.status_code != 200:
-
-            raise Exception(
-                f"API lỗi: {response.status_code}"
-            )
+            raise Exception(f"Hệ thống API bảo trì (Mã lỗi: {response.status_code})")
 
         data = response.json()
 
-        username = data.get(
-            "username",
-            "Không rõ"
-        )
+        # Hàm xử lý số an toàn tránh crash bot
+        def safe_int(value, default=0):
+            try:
+                return int(value) if value is not None and str(value).isdigit() else default
+            except:
+                return default
 
-        uid = data.get(
-            "uid",
-            "Không rõ"
-        )
+        username = data.get("username") or "Không rõ"
+        uid = data.get("uid") or "Không rõ"
+        nickname = data.get("nickname") or "Không rõ"
+        
+        before = safe_int(data.get("before"))
+        added = safe_int(data.get("added"))
+        after = safe_int(data.get("after"), before + added)
 
-        nickname = data.get(
-            "nickname",
-            "Không rõ"
-        )
-
-        before = int(
-            data.get(
-                "before",
-                0
-            )
-        )
-
-        added = int(
-            data.get(
-                "added",
-                0
-            )
-        )
-
-        after = int(
-            data.get(
-                "after",
-                before + added
-            )
-        )
-
-        speed = round(
-            time.time()-start_time,
-            2
-        )
+        speed = round(time.time() - start_time, 2)
 
         result = f"""
 ╔══════════════════╗
@@ -148,33 +93,44 @@ def like(message):
 ━━━━━━━━━━━━━━
 
 ⚡ Tốc độ: {speed}s
-🕒 Time:
-{time.strftime("%H:%M:%S | %d/%m/%Y")}
+🕒 {time.strftime("%H:%M:%S | %d/%m/%Y")}
 
-📡 Trạng thái: Hoạt động
+📡 Trạng thái: Hoạt động ổn định
 
-✅️ Video đã được buff thành công!
-🚀 Cảm ơn đã sử dụng bot
+✅ Video đã được xử lý thành công!
+🚀 Cảm ơn bạn đã sử dụng bot.
 """
-
         bot.edit_message_text(
             result,
             chat_id=message.chat.id,
             message_id=loading.message_id
         )
 
+    except Timeout:
+        handle_error(message, loading, "❌ API phản hồi quá chậm (Timeout). Vui lòng thử lại sau!")
+        
+    except RequestException:
+        handle_error(message, loading, "❌ Lỗi kết nối đến máy chủ tăng tương tác!")
+        
     except Exception as e:
-
-        bot.send_message(
-            message.chat.id,
-            f"❌ Lỗi:\n{e}"
-        )
-
-        print(e)
+        handle_error(message, loading, f"❌ Có lỗi xảy ra:\n`{str(e)}`")
 
 
+def handle_error(message, loading_msg, error_text):
+    """Hàm xử lý hiển thị lỗi mượt mà cho người dùng"""
+    print(f" LOG LỖI: {error_text}")
+    if loading_msg:
+        try:
+            bot.edit_message_text(error_text, chat_id=message.chat.id, message_id=loading_msg.message_id, parse_mode="Markdown")
+        except:
+            bot.send_message(message.chat.id, error_text, parse_mode="Markdown")
+    else:
+        bot.send_message(message.chat.id, error_text, parse_mode="Markdown")
+
+
+# Khởi chạy bot liên tục
 bot.infinity_polling(
     timeout=60,
-    long_polling_timeout=60,
+    long_polling_timeout=30,
     none_stop=True
 )
