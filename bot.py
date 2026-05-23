@@ -3,17 +3,20 @@ import urllib.parse
 import telebot
 import requests
 from requests.exceptions import RequestException, Timeout
+# Gọi hệ thống keep_alive từ file kế bên sang
 from keep_alive import keep_alive
 
+# Token cấu hình trực tiếp của bạn
 TOKEN = "8080338995:AAEXOZr1duwHWqmBBciXvmeHFHaiuOTvayE"
 bot = telebot.TeleBot(TOKEN)
 
+# Kích hoạt tính năng giữ sống Web Server trước khi chạy Bot chính
 keep_alive()
-print("✅ Hệ thống Keep-Alive độc lập đã khởi động!")
 print("✅ Bot Telegram đang hoạt động...")
 
+# Từ điển lưu trữ thời gian bấm lệnh của người dùng để chống spam
 user_cooldowns = {}
-COOLDOWN_TIME = 15  # Thời gian chờ giữa các lần dùng lệnh của user
+COOLDOWN_TIME = 10  # Thời gian chờ giữa các lần dùng lệnh (giây)
 
 
 @bot.message_handler(commands=['start'])
@@ -35,79 +38,81 @@ def like(message):
     user_id = message.from_user.id
     current_time = time.time()
 
-    # --- CHỐNG SPAM ---
+    # --- CƠ CHẾ CHỐNG SPAM (COOLDOWN) ---
     if user_id in user_cooldowns:
         elapsed_time = current_time - user_cooldowns[user_id]
         if elapsed_time < COOLDOWN_TIME:
             remaining = round(COOLDOWN_TIME - elapsed_time, 1)
-            bot.reply_to(message, f"⏳ Vui lòng đợi {remaining} giây để tiếp tục.")
+            bot.reply_to(message, f"⏳ Bạn đang thao tác quá nhanh! Vui lòng đợi {remaining} giây để tiếp tục.")
             return
 
     start_time = time.time()
     loading = None
 
     try:
+        # Tách lệnh và link
         args = message.text.split(maxsplit=1)
 
         if len(args) < 2:
-            bot.reply_to(message, "❌ Vui lòng nhập link TikTok")
+            bot.reply_to(message, "❌ Vui lòng nhập kèm link TikTok.\nVí dụ: `/like https://vt.tiktok.com/xxx`", parse_mode="Markdown")
             return
 
         url = args[1].strip()
 
         if "tiktok" not in url.lower():
-            bot.reply_to(message, "❌ Link TikTok không hợp lệ")
+            bot.reply_to(message, "❌ Link gửi lên không phải link TikTok hợp lệ!")
             return
 
-        # 1. Gửi tin nhắn trạng thái đầu tiên
-        loading = bot.reply_to(message, "⏳ Đang kết nối tới máy chủ tương tác...")
+        # Gửi tin nhắn chờ xử lý và lưu trạng thái cooldown của người dùng
+        loading = bot.reply_to(message, "⏳ Đang kết nối tới máy chủ API và xếp hàng xử lý dữ liệu...")
         user_cooldowns[user_id] = current_time
 
-        # ========================================================
-        # 2. CƠ CHẾ LOAD CHẬM API (DELAY NHÂN TẠO)
-        # Bạn có thể đổi số 3 thành số giây bạn muốn bot đợi (ví dụ: 5, 10)
-        # ========================================================
-        DELAY_SECONDS = 3 
-        time.sleep(DELAY_SECONDS) 
-        
-        # Cập nhật tin nhắn để người dùng biết bot vẫn đang chạy chứ không bị đơ
-        bot.edit_message_text(
-            "⏳ Đang xếp hàng xử lý dữ liệu video...", 
-            chat_id=message.chat.id, 
-            message_id=loading.message_id
-        )
-        time.sleep(2) # Đợi thêm 2 giây nữa trước khi gọi API thật
-        # ========================================================
-
+        # Mã hóa URL và chuẩn bị endpoint API
         encoded = urllib.parse.quote(url)
         api = f"https://tiktokvm.vercel.app/api/likes?url={encoded}"
 
-        # 3. Gọi API thật sự sau khi đã delay xong
-        response = requests.get(api, timeout=40)
+        # Thực hiện gọi API (Đặt thời gian chờ timeout là 30 giây phòng khi server bận)
+        response = requests.get(api, timeout=56)
 
         if response.status_code != 200:
-            raise Exception(f"Hệ thống API bảo trì hoặc bận (Mã lỗi: {response.status_code})")
+            raise Exception(f"Máy chủ tương tác đang bảo trì (Mã lỗi HTTP: {response.status_code})")
 
-        data = response.json()
+        # Đọc dữ liệu JSON trả về
+        try:
+            data = response.json()
+            # In log ra màn hình console để theo dõi dữ liệu thực tế nếu cần debug
+            print(f" LOG API [{time.strftime('%H:%M:%S')}]: {data}")
+        except ValueError:
+            raise Exception("API không trả về cấu trúc định dạng JSON hợp lệ.")
 
-        def safe_int(value, default=0):
-            try:
-                return int(value) if value is not None and str(value).isdigit() else default
-            except:
-                return default
-
-        username = data.get("username") or "Không rõ"
-        uid = data.get("uid") or "Không rõ"
-        nickname = data.get("nickname") or "Không rõ"
+        # --- PHÂN TÍCH DỮ LIỆU AN TOÀN CHỐNG CRASH BOT ---
+        # Tìm kiếm linh hoạt theo nhiều tên trường dữ liệu khác nhau phòng khi API thay đổi cấu trúc cấu hình
+        username = data.get("username") or data.get("user") or data.get("author") or "Không rõ"
+        uid = data.get("uid") or data.get("user_id") or data.get("id") or "Không rõ"
+        nickname = data.get("nickname") or data.get("name") or "Không rõ"
         
-        before = safe_int(data.get("before"))
-        added = safe_int(data.get("added"))
-        after = safe_int(data.get("after"), before + added)
+        # Hàm ép số an toàn, tránh lỗi khi trường dữ liệu bị rỗng hoặc trả về null
+        def safe_int(keys, default_val=0):
+            for key in keys:
+                val = data.get(key)
+                if val is not None and str(val).isdigit():
+                    return int(val)
+            return default_val
 
-        # Tính tổng tốc độ bao gồm cả thời gian đã delay
+        before = safe_int(["before", "original_likes", "old_likes"], 0)
+        added = safe_int(["added", "added_likes", "count"], 0)
+        after = safe_int(["after", "new_likes", "current_likes"], before + added)
+
+        # Kiểm tra xem API có trả về thông báo từ chối / lỗi ẩn bên trong JSON không
+        if username == "Không rõ" and before == 0 and added == 0:
+            api_error = data.get("message") or data.get("error") or data.get("msg")
+            if api_error:
+                raise Exception(f"Phía API từ chối xử lý với lý do: {api_error}")
+
+        # Tính toán tốc độ xử lý thực tế
         speed = round(time.time() - start_time, 2)
 
-        result = f"""
+        result_text = f"""
 ╔══════════════════╗
    ✨ BUFF TYM THÀNH CÔNG ✨
 ╚══════════════════╝
@@ -124,7 +129,7 @@ def like(message):
 
 ━━━━━━━━━━━━━━
 
-⚡ Tổng thời gian xử lý: {speed}s
+⚡ Tốc độ phản hồi: {speed}s
 🕒 {time.strftime("%H:%M:%S | %d/%m/%Y")}
 
 📡 Trạng thái: Hoạt động ổn định
@@ -132,23 +137,25 @@ def like(message):
 ✅ Video đã được xử lý thành công!
 🚀 Cảm ơn bạn đã sử dụng bot.
 """
+        # Cập nhật trực tiếp vào tin nhắn đang chờ trước đó
         bot.edit_message_text(
-            result,
+            result_text,
             chat_id=message.chat.id,
             message_id=loading.message_id
         )
 
     except Timeout:
-        handle_error(message, loading, "❌ Máy chủ API phản hồi quá chậm. Vui lòng thử lại sau!")
+        handle_error(message, loading, "❌ Máy chủ API phản hồi quá chậm (Timeout). Vui lòng thử lại sau ít phút khi máy chủ bớt nghẽn!")
         
     except RequestException:
-        handle_error(message, loading, "❌ Lỗi kết nối đến máy chủ tăng tương tác!")
+        handle_error(message, loading, "❌ Lỗi kết nối vật lý không thể chạm tới máy chủ tăng tương tác!")
         
     except Exception as e:
-        handle_error(message, loading, f"❌ Có lỗi xảy ra trong quá trình xử lý:\n`{str(e)}`")
+        handle_error(message, loading, f"❌ Bot không thể lấy được kết quả từ API!\n\n**Chi tiết lỗi:** `{str(e)}`")
 
 
 def handle_error(message, loading_msg, error_text):
+    """Hàm trung gian quản lý việc hiển thị thông báo lỗi mượt mà trên UI Telegram"""
     print(f" LOG LỖI: {error_text}")
     if loading_msg:
         try:
@@ -159,8 +166,9 @@ def handle_error(message, loading_msg, error_text):
         bot.send_message(message.chat.id, error_text, parse_mode="Markdown")
 
 
+# Khởi chạy bot liên tục
 bot.infinity_polling(
     timeout=60,
-    long_polling_timeout=30,
+    long_polling_timeout=40,
     none_stop=True
 )
