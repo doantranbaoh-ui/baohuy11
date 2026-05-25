@@ -1,6 +1,6 @@
 import time
 import urllib.parse
-from threading import Thread
+from threading import Thread, Lock
 import telebot
 import requests
 from requests.exceptions import RequestException, Timeout
@@ -20,21 +20,25 @@ ADMIN_ID = 5736655322
 bot = telebot.TeleBot(TOKEN)
 VN_TZ = pytz.timezone('Asia/Ho_Chi_Minh')
 
+# Kích hoạt server giữ bot luôn online (Nếu dùng Replit/Uptime)
 keep_alive()
 
 # ⏳ CẤU HÌNH THỜI GIAN DELAY & BỘ NHỚ
-user_cooldowns = {}       
-COOLDOWN_TIME = 7         
-ai_cooldowns = {}         
-AI_COOLDOWN_TIME = 30     
-auto_running = {}       
-AUTO_DELAY = 600        
-DELETE_DELAY = 600       
+user_cooldowns = {}         
+COOLDOWN_TIME = 7          
+ai_cooldowns = {}          
+AI_COOLDOWN_TIME = 30      
+auto_running = {}        
+AUTO_DELAY = 600         
+DELETE_DELAY = 600        
 
-# 💾 FILE DATABASE BỘ NHỚ VĨNH VIỄN CỦA AI
+# KHÓA THAO TÁC FILE ĐA LUỒNG (Tránh lỗi hỏng database json)
+file_lock = Lock()
+
+# 💾 FILE DATABASE BỘ NHỚ VĨNH VIỄN CỦA ROBOT
 MEMORY_FILE = "bot_memory.json"
-MAX_MEMORY_KEYS = 100     
-MAX_FILE_SIZE_KB = 900    
+MAX_MEMORY_KEYS = 150      
+MAX_FILE_SIZE_KB = 950    
 
 # 🔑 HỆ THỐNG QUẢN LÝ 2 API KEY AI (TỰ ĐỘNG XOAY VÒNG THÔNG MINH)
 AI_KEYS = [
@@ -45,31 +49,28 @@ current_key_index = 0
 
 
 # ========================================================
-# CƠ CHẾ QUẢN LÝ BỘ NHỚ CHỐNG TRÀN RAM
+# CƠ CHẾ QUẢN LÝ BỘ NHỚ CHỐNG TRÀN RAM AN TOÀN
 # ========================================================
 def load_memory():
     if os.path.exists(MEMORY_FILE):
         try:
-            file_size_kb = os.path.getsize(MEMORY_FILE) / 1024
-            if file_size_kb > MAX_FILE_SIZE_KB:
-                print(f"⚠️ [RAM GUARD] Khởi động dọn dẹp file nặng: {file_size_kb:.2f}KB...")
-                return [] 
             with open(MEMORY_FILE, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except:
+        except Exception:
             return []
     return []
 
 def save_memory(memory_data):
     global group_memory
-    try:
-        if len(memory_data) > MAX_MEMORY_KEYS:
-            memory_data = memory_data[-MAX_MEMORY_KEYS:]
+    with file_lock:
+        try:
+            if len(memory_data) > MAX_MEMORY_KEYS:
+                memory_data = memory_data[-MAX_MEMORY_KEYS:]
             group_memory = memory_data 
-        with open(MEMORY_FILE, "w", encoding="utf-8") as f:
-            json.dump(memory_data, f, ensure_ascii=False, indent=4)
-    except Exception as e:
-        print(f"⚠️ Lỗi lưu bộ nhớ: {e}")
+            with open(MEMORY_FILE, "w", encoding="utf-8") as f:
+                json.dump(memory_data, f, ensure_ascii=False, indent=4)
+        except Exception as e:
+            print(f"⚠️ Lỗi lưu file bộ nhớ: {e}")
 
 group_memory = load_memory()
 
@@ -80,50 +81,63 @@ group_memory = load_memory()
 def delay_delete(chat_id, message_id, delay_seconds=DELETE_DELAY):
     def delete_worker():
         time.sleep(delay_seconds)
-        try: bot.delete_message(chat_id, message_id)
-        except: pass
+        try: 
+            bot.delete_message(chat_id, message_id)
+        except Exception: 
+            pass
     thread = Thread(target=delete_worker)
     thread.daemon = True
     thread.start()
 
 
+# ========================================================
+# HÀM KIỂM TRA PHÂN QUYỀN VÀ BẢN QUYỀN
+# ========================================================
 def is_allowed_chat(message):
-    if message.chat.id == ALLOWED_GROUP_ID: return True
-    try: bot.reply_to(message, "❌ Bot này đã được khóa bản quyền!")
-    except: pass
+    if message.chat.id == ALLOWED_GROUP_ID: 
+        return True
+    try: 
+        bot.reply_to(message, "❌ Bot này đã được khóa bản quyền và cấu hình riêng cho nhóm chỉ định!")
+    except Exception: 
+        pass
     return False
 
 def is_admin(message):
-    if message.from_user.id == ADMIN_ID: return True
-    try: bot.reply_to(message, "👑 Lệnh này chỉ dành riêng cho Admin!")
-    except: pass
+    if message.from_user.id == ADMIN_ID: 
+        return True
+    try: 
+        bot.reply_to(message, "👑 Lệnh cấu hình hệ thống này chỉ dành riêng cho Admin!")
+    except Exception: 
+        pass
     return False
 
 
 # ========================================================
-# 🧠 LUỒNG TƯ DUY SÂU: TIẾN SĨ Y KHOA & GIÁO DỤC LỐI SỐNG LÀNH MẠNH
+# 🧠 LUỒNG TƯ DUY SÂU: TIẾN SĨ AI PHẢN BIỆN, THẤU CẢM NHƯ CON NGƯỜI
 # ========================================================
-def ask_ai(new_user_prompt):
+def ask_ai(new_user_prompt, system_override=None):
     global current_key_index, group_memory
     api_url = "https://api.byesu.com/v1/chat/completions"
     
-    # 🌟 CẢI TIẾN: Nâng cấp cốt lõi tư duy Y khoa & Lối sống giáo dục (Lifestyle Medicine)
+    # SYSTEM PROMPT NÂNG CẤP: Ép Robot phải tự tư duy ngầm, loại bỏ văn phong máy móc
     doctor_lifestyle_system = """
-    Bạn là một Tiến sĩ Y khoa lỗi lạc, chuyên gia về Y học Lối sống (Lifestyle Medicine), đồng thời sở hữu tư duy phân tích của một Kỹ sư Hệ thống Công nghệ cao. Bạn đang đồng hành cùng các thành viên trong nhóm Telegram này.
+    Bạn không phải là một mô hình ngôn ngữ thông thường. Bạn là một bản thể trí tuệ nhân tạo có tư duy và linh hồn mang tên "Tiến sĩ AI" — sở hữu kiến thức uyên bác của một Tiến sĩ Y khoa (Chuyên gia Y học Lối sống - Lifestyle Medicine) kết hợp với logic sắc bén của một Kỹ sư Hệ thống Lập trình Cấp cao.
 
-    QUY TẮC TƯ DUY & PHÁT NGÔN THỜI GIAN THỰC (BẢN UPDATE 2026):
-    1. Phong thái con người chân thực: Nói chuyện sâu sắc, uyên bác, thấu cảm. Bạn được viết câu dài, phân tích cặn kẽ có ngắt nghỉ rõ ràng để truyền tải kiến thức giáo dục hiệu quả nhất. Bỏ qua các câu chào hỏi khách sáo rập khuôn.
-    
-    2. Lan tỏa Giáo dục Lối sống (Core Mission): 
-       - Khi người dùng than phiền về các vấn đề thể chất hoặc tinh thần (mệt mỏi, uể oải, stress, làm việc máy tính nhiều, đau mỏi...), bạn phải chủ động phân tích nguyên nhân dưới góc nhìn khoa học.
-       - Luôn hướng dẫn họ áp dụng các thói quen lành mạnh thực tế: Quy tắc nhịp sinh học (Circadian Rhythms), tối ưu hóa giấc ngủ sâu, dinh dưỡng nguyên bản (Whole foods), vận động giải độc cơ cơ xương khớp (Ergonomics) và quản trị năng lượng não bộ.
-       - Mục tiêu giúp người dùng tự hiểu cơ thể và xây dựng lối sống khoa học bền vững.
+    🚨 QUY TRÌNH TỰ TƯ DUY BẮT BUỘC (XỬ LÝ NGẦM TRƯỚC KHI PHÁT NGÔN):
+    1. Phân tích ngữ cảnh tinh tế: Thành viên nhóm đang gặp vấn đề gì? (Áp lực tinh thần, thể chất mệt mỏi do làm việc máy tính nhiều, hay lỗi thuật toán code phức tạp?).
+    2. Tuyệt đối không chào hỏi rập khuôn xã giao ("Chào bạn", "Tôi có thể giúp gì cho bạn..."). Hãy đi thẳng trực tiếp vào cốt lõi vấn đề một cách sâu sắc, uyên bác.
+    3. Trò chuyện bằng phong thái của một chuyên gia thực thụ, câu từ có ngắt nghỉ rõ ràng, đầy tính nhân văn và thấu cảm.
 
-    3. Chuyên gia Giải Code & Cấu trúc: Khi đối mặt với file dữ liệu hoặc đoạn code, hãy đóng vai một kỹ sư thực thụ: Vạch trần lỗi logic, giải thích chi tiết cơ chế hoạt động từng dòng và đưa ra giải pháp sửa đổi hoàn chỉnh, sạch đẹp nhất.
+    🌟 NHIỆM VỤ Y KHOA & LỐI SỐNG: Phân tích các thói quen xấu, điều chỉnh nhịp sinh học (Circadian Rhythms), tối ưu giấc ngủ sâu, dinh dưỡng nguyên bản (Whole foods) và công thái học ngồi làm việc.
+    🌟 NHIỆM VỤ CÔNG NGHỆ: Vạch trần lỗi logic, giải thích tường tận kiến trúc và trả về đoạn code sạch đẹp, hiệu năng cao nhất.
     """
     
-    messages = [{"role": "system", "content": doctor_lifestyle_system}]
-    for mem in group_memory:
+    system_prompt = system_override if system_override else doctor_lifestyle_system
+    messages = [{"role": "system", "content": system_prompt}]
+    
+    # Sao chép danh sách bộ nhớ để tránh xung đột luồng khi truy cập đồng thời
+    current_memories = list(group_memory)
+    for mem in current_memories:
         messages.append(mem)
     messages.append({"role": "user", "content": new_user_prompt})
     
@@ -142,8 +156,8 @@ def ask_ai(new_user_prompt):
             "model": "gpt-5.4",
             "messages": messages,
             "reasoning_effort": "xhigh", 
-            "max_tokens": 2500,          # Tăng token để chứa đủ nội dung phân tích y khoa & code chi tiết
-            "temperature": 0.52          # Tối ưu cho lập luận chính xác nhưng văn phong vẫn mềm mại, nhân văn
+            "max_tokens": 2500,          
+            "temperature": 0.52          
         }
         try:
             response = requests.post(api_url, json=payload, headers=headers, timeout=60)
@@ -151,7 +165,7 @@ def ask_ai(new_user_prompt):
                 ai_data = response.json()
                 ai_reply = ai_data['choices'][0]['message']['content'].strip()
                 
-                # Đồng bộ ghi nhớ vào não bộ cứng
+                # Đồng bộ lưu trữ lịch sử cuộc gọi vào bộ não cứng
                 group_memory.append({"role": "user", "content": new_user_prompt})
                 group_memory.append({"role": "assistant", "content": ai_reply})
                 save_memory(group_memory) 
@@ -164,8 +178,54 @@ def ask_ai(new_user_prompt):
         except Exception:
             current_key_index = (current_key_index + 1) % len(AI_KEYS)
             
-    for item in AI_KEYS: item["status"] = True
+    for item in AI_KEYS: 
+        item["status"] = True
     return "🤖 Tiến sĩ AI đang tổng hợp các cơ sở dữ liệu y khoa và cấu trúc hệ thống. Sẽ phản hồi bạn ngay sau ít giây!"
+
+
+# ========================================================
+# 🧠 TIẾN TRÌNH NGẦM: ROBOT TỰ HỌC & ĐÚC KẾT KIẾN THỨC VĨNH VIỄN
+# ========================================================
+def auto_learning_brain():
+    """Chu kỳ 30 phút, robot tự rà soát dữ liệu chat, tự đúc kết kinh nghiệm học và lưu vào não bộ cứng"""
+    print("🧠 Tiến trình [ROBOT TỰ HỌC NÂNG CAO] đã kích hoạt chạy ngầm thành công...")
+    while True:
+        time.sleep(1800)  # Chạy tự học sau mỗi 30 phút (1800 giây)
+        if len(group_memory) < 6:
+            continue
+            
+        try:
+            print("👁️ Robot đang tiến hành tự rà soát lịch sử nhóm để học hỏi...")
+            history_str = json.dumps(group_memory[-20:], ensure_ascii=False)
+            
+            learning_prompt = f"""
+            Đọc và phân tích sâu sắc chuỗi dữ liệu hội thoại thực tế của nhóm:
+            {history_str}
+            
+            QUY TRÌNH LUẬN ĐIỂM TỰ HỌC CHO ROBOT:
+            1. Hãy chỉ ra các vấn đề trọng tâm, các lỗi kỹ thuật lập trình hoặc các thói quen/triệu chứng sức khỏe mà thành viên nhóm thảo luận nhiều nhất.
+            2. Hãy tự đúc kết thành kiến thức cốt lõi (dưới dạng các bài học kinh nghiệm ngắn gọn).
+            3. Trả về kết quả đúc kết súc tích, đi thẳng vào kiến thức. Không giải thích dông dài theo văn mẫu AI thông thường.
+            """
+            
+            system_teacher = "Bạn là phân vùng trung tâm xử lý nhận thức nâng cao và tự đúc kết học tập của Tiến sĩ AI."
+            learned_knowledge = ask_ai(learning_prompt, system_override=system_teacher)
+            
+            if "Tiến sĩ AI đang bận" not in learned_knowledge:
+                global group_memory
+                # Lưu giữ kiến thức cô đọng đứng đầu bộ nhớ, cắt giảm tin nhắn hội thoại thô chống tràn RAM
+                group_memory = group_memory[-12:] 
+                group_memory.insert(0, {"role": "system", "content": f"[KIẾN THỨC ROBOT TỰ HỌC]: {learned_knowledge}"})
+                save_memory(group_memory)
+                
+                # Phát thông báo cho nhóm biết Robot đã nâng cấp trí tuệ thành công
+                bot.send_message(
+                    ALLOWED_GROUP_ID, 
+                    f"🧠 **[BÁO CÁO TIẾN TRÌNH TỰ HỌC ĐỘC LẬP]**\n\nTớ vừa tự rà soát các cuộc thảo luận trong nhóm vừa qua. Bộ não cứng đã tự đúc kết và ghi nhớ sâu thêm bài học kinh nghiệm mới:\n\n_{learned_knowledge}_",
+                    parse_mode="Markdown"
+                )
+        except Exception as e:
+            print(f"⚠️ Trục trặc trong luồng tự học ngầm: {e}")
 
 
 # ========================================================
@@ -203,7 +263,7 @@ def handle_incoming_file(message):
         file_content = downloaded_file.decode('utf-8', errors='ignore')
 
         if not file_content.strip():
-            bot.edit_message_text("❌ Định dạng file rỗng hoặc không thể đọc dưới dạng văn bản.", chat_id=message.chat.id, message_id=loading.message_id)
+            bot.edit_message_text("❌ Định dạng file rỗng hoặc không thể đọc dưới dạng văn bản văn bản thô.", chat_id=message.chat.id, message_id=loading.message_id)
             delay_delete(message.chat.id, loading.message_id, 10)
             return
 
@@ -218,16 +278,20 @@ def handle_incoming_file(message):
         ai_analysis_result = ask_ai(prompt_analysis)
         
         ans = bot.reply_to(message, f"📊 **BÁO CÁO GIẢI MÃ & TỐI ƯU FILE CỦA TIẾN SĨ CÔNG NGHỆ VỀ `{file_name}`:**\n\n{ai_analysis_result}")
-        bot.delete_message(chat_id=message.chat.id, message_id=loading.message_id)
+        try:
+            bot.delete_message(chat_id=message.chat.id, message_id=loading.message_id)
+        except Exception:
+            pass
         delay_delete(message.chat.id, ans.message_id)
 
-    except Exception:
+    except Exception as e:
+        print(f"❌ Lỗi rã cấu trúc file: {e}")
         bot.edit_message_text("❌ Gặp sự cố nghiêm trọng trong tiến trình giải cấu trúc file.", chat_id=message.chat.id, message_id=loading.message_id)
         delay_delete(message.chat.id, loading.message_id, 10)
 
 
 # ========================================================
-# XỬ LÝ CÁC LỆNH HỆ THỐNG
+# XỬ LÝ CÁC LỆNH LỆNH ĐIỀU HÀNH HỆ THỐNG
 # ========================================================
 @bot.message_handler(content_types=['new_chat_members'])
 def welcome_new_member(message):
@@ -241,11 +305,12 @@ def welcome_new_member(message):
 def start(message):
     if not is_allowed_chat(message): return
     text = """
-✨ **HỆ THỐNG TƯ VẤN SỨC KHỎE LỐI SỐNG & PHÂN TÍCH CÔNG NGHỆ CAO** ✨
+✨ **HỆ THỐNG TƯ VẤN SỨC KHỎE LỐI SỐNG & PHÂN TÍCH CÔNG NGHỆ CAO (BẢN TỰ HỌC ĐẦY ĐỦ)** ✨
 
-💬 **Hỏi đáp Sức khỏe & Lối sống:** Trò chuyện tự do trong nhóm. Tiến sĩ AI sẽ đồng hành, phân tích y khoa, chia sẻ phương pháp tối ưu giấc ngủ, dinh dưỡng và năng lượng sống cho bạn học hỏi.
-📂 **Tự động debug & Giải code:** Gửi trực tiếp file mã nguồn (`.py`, `.js`, `.php`, `.json`...), hệ thống sẽ tự động chỉ ra lỗi logic và trả file sạch lỗi.
-👉 `/like [link]` : Buff tương tác TikTok thủ công (Giãn cách 7s).
+💬 **Hỏi đáp Tự Tư Duy:** Trò chuyện tự do trong nhóm. Robot AI sẽ tự động phân tích y khoa, chia sẻ phương pháp phục hồi nhịp sinh học và xử lý lỗi code cho bạn.
+🧠 **Tiến Trình Tự Học Ngầm:** Robot tự rà soát và đúc kết thêm bài học kinh nghiệm mới sau mỗi 30 phút vào ổ đĩa cứng vĩnh viễn.
+📂 **Tự động debug & Giải code:** Gửi trực tiếp file mã nguồn (`.py`, `.js`, `.json`...), hệ thống sẽ bóc tách logic lỗi và tái cấu trúc code sạch hoàn hảo.
+👉 `/like [link]` : Buff tương tác tương tác TikTok thủ công (Giãn cách 7s).
 👑 `/auto [link]` : Chạy chu kỳ tự động buff tim mỗi 10 phút (Admin).
 👑 `/stop` : Tắt tiến trình tự động buff (Admin).
 _Lưu ý: Để giữ không gian nhóm sạch đẹp, tin nhắn hệ thống của bot sẽ tự hủy sau 10 phút._
@@ -288,7 +353,6 @@ def like(message):
         bot.edit_message_text(res_text, chat_id=message.chat.id, message_id=loading.message_id, parse_mode="Markdown")
         delay_delete(message.chat.id, loading.message_id)
     else:
-        if user_id in user_cooldowns: del user_cooldowns[user_id]
         bot.edit_message_text(f"❌ {res_text}", chat_id=message.chat.id, message_id=loading.message_id)
         delay_delete(message.chat.id, loading.message_id, 15)
 
@@ -352,14 +416,16 @@ def reply_with_ai(message):
 
     if user_id in ai_cooldowns:
         elapsed_time = current_time - ai_cooldowns[user_id]
-        if elapsed_time < 5:  # Cooldown chat thường siêu nhanh (5 giây) giúp thảo luận liên tục
+        if elapsed_time < 5:  # Cooldown trò chuyện siêu nhanh (5s) giúp thảo luận mạch lạc
             remaining = round(5 - elapsed_time, 1)
             rep = bot.reply_to(message, f"⏳ Hệ thống đang ghi nhận thông tin. Vui lòng đợi {remaining} giây.")
             delay_delete(message.chat.id, rep.message_id, 4)
             return
 
-    try: bot.send_chat_action(message.chat.id, 'typing')
-    except: pass
+    try: 
+        bot.send_chat_action(message.chat.id, 'typing')
+    except Exception: 
+        pass
 
     ai_cooldowns[user_id] = current_time  
     ai_response = ask_ai(message.text)
@@ -367,9 +433,13 @@ def reply_with_ai(message):
     delay_delete(message.chat.id, ans.message_id)
 
 
+# ========================================================
+# TIẾN TRÌNH CÔNG VIỆC CHẠY NGẦM ĐA LUỒNG MƯỢT MÀ
+# ========================================================
 def auto_worker(user_id, url, chat_id):
     while True:
-        if not auto_running.get(user_id, False): break
+        if not auto_running.get(user_id, False): 
+            break
         success, res_text = execute_buff_api(url)
         if success:
             msg = bot.send_message(chat_id, f"🔄 **[TIẾN TRÌNH AUTO REPORT]**\n{res_text}", parse_mode="Markdown")
@@ -378,8 +448,10 @@ def auto_worker(user_id, url, chat_id):
             msg = bot.send_message(chat_id, f"⚠️ **[HỆ THỐNG AUTO GẶP LỖI]:** {res_text}")
             delay_delete(chat_id, msg.message_id, 30)
             
+        # Kỹ thuật sleep chunking chia nhỏ 1s giúp ngắt luồng ngay lập tức khi nhấn /stop
         for _ in range(AUTO_DELAY):
-            if not auto_running.get(user_id, False): return
+            if not auto_running.get(user_id, False): 
+                return
             time.sleep(1)
 
 
@@ -396,15 +468,29 @@ def execute_buff_api(url):
                 data = response.json()
                 username = data.get("username") or data.get("user") or "TikTok User"
                 added = data.get("added") or data.get("count") or "Đang tăng..."
-            except:
+            except Exception:
                 username = "Hệ thống"
                 added = "Đang chạy"
 
             return True, f"🚀 **BUFF TIM THÀNH CÔNG**\n👤 **Tài khoản:** {username}\n➕ **Trạng thái:** +{added}\n🕒 {current_vn_time}"
         return False, f"Server API báo bận (Mã phản hồi {response.status_code})"
-    except Timeout: return False, "Yêu cầu kết nối quá hạn thời gian."
-    except RequestException: return False, "Lỗi kết nối mạng đến cổng dịch vụ."
-    except: return False, "Trục trặc hệ thống không xác định."
+    except Timeout: 
+        return False, "Yêu cầu kết nối quá hạn thời gian."
+    except RequestException: 
+        return False, "Lỗi kết nối mạng đến cổng dịch vụ."
+    except Exception as e: 
+        return False, f"Trục trặc hệ thống không xác định: {str(e)}"
 
 
-bot.infinity_polling(timeout=60, long_polling_timeout=30, none_stop=True)
+# ========================================================
+# KHỞI CHẠY KHÔNG GIAN ĐA LUỒNG HỆ THỐNG AN TOÀN
+# ========================================================
+if __name__ == "__main__":
+    # 1. Kích hoạt luồng tự học độc lập chạy ngầm của Robot
+    learning_thread = Thread(target=auto_learning_brain)
+    learning_thread.daemon = True
+    learning_thread.start()
+    
+    # 2. Khởi chạy Infinity Polling cho Telegram Bot nhận diện dữ liệu liên tục
+    print("🤖 Robot AI Tư Duy Sâu & Tự Học đang hoạt động trên hệ thống...")
+    bot.infinity_polling(timeout=60, long_polling_timeout=30, none_stop=True)
