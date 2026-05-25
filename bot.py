@@ -29,10 +29,12 @@ ai_cooldowns = {}
 AI_COOLDOWN_TIME = 15     
 auto_running = {}       
 AUTO_DELAY = 600        
-DELETE_DELAY = 600       # 10 phút tự động dọn tin nhắn
+DELETE_DELAY = 600       
 
 # 💾 FILE DATABASE BỘ NHỚ VĨNH VIỄN CỦA AI
 MEMORY_FILE = "bot_memory.json"
+MAX_MEMORY_KEYS = 20     # Giới hạn tối đa 20 tin nhắn trong RAM đệm
+MAX_FILE_SIZE_KB = 50    # Giới hạn file tối đa 50KB để bảo vệ RAM tuyệt đối
 
 # DANH SÁCH 2 API KEY AI CỦA BẠN
 AI_KEYS = [
@@ -43,28 +45,38 @@ current_key_index = 0
 
 
 # ========================================================
-# CƠ CHẾ ĐỌC / GHI BỘ NHỚ ĐỂ TỰ HỌC VĨNH VIỄN
+# CƠ CHẾ QUẢN LÝ BỘ NHỚ CHỐNG TRÀN RAM (GIỚI HẠN PHẦN TỬ & DUNG LƯỢNG)
 # ========================================================
 def load_memory():
     if os.path.exists(MEMORY_FILE):
         try:
+            # KIỂM TRA CHỐNG TRÀN: Nếu file bỗng dưng quá nặng (>50KB), tự động cắt tỉa
+            file_size_kb = os.path.getsize(MEMORY_FILE) / 1024
+            if file_size_kb > MAX_FILE_SIZE_KB:
+                print(f"⚠️ [RAM GUARD] Phát hiện file bộ nhớ nặng {file_size_kb:.2f}KB. Tiến hành dọn dẹp dữ liệu cũ...")
+                return [] # Reset bộ nhớ đệm tạm thời để giải phóng dung lượng RAM
+                
             with open(MEMORY_FILE, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except:
+        except Exception as e:
+            print(f"❌ Lỗi đọc bộ nhớ: {e}")
             return []
     return []
 
 def save_memory(memory_data):
+    global group_memory
     try:
-        # Giới hạn nhớ tối đa 15 cặp hội thoại gần nhất để tránh tràn băng thông API công nghệ cao
-        if len(memory_data) > 30:
-            memory_data = memory_data[-30:]
+        # KIỂM TRA TRÊN RAM: Giới hạn số lượng câu thoại lưu trên bộ đệm RAM sinh tồn
+        if len(memory_data) > MAX_MEMORY_KEYS:
+            memory_data = memory_data[-MAX_MEMORY_KEYS:]
+            group_memory = memory_data # Cập nhật lại RAM toàn cục
+            
         with open(MEMORY_FILE, "w", encoding="utf-8") as f:
             json.dump(memory_data, f, ensure_ascii=False, indent=4)
     except Exception as e:
-        print(f"⚠️ Không thể lưu bộ nhớ học tập: {e}")
+        print(f"⚠️ Không thể tối ưu lưu bộ nhớ: {e}")
 
-# Tải bộ nhớ lên RAM ngay khi bot vừa bật nguồn
+# Tải dữ liệu ban đầu an toàn
 group_memory = load_memory()
 
 
@@ -97,23 +109,20 @@ def is_admin(message):
 
 
 # ========================================================
-# LUỒNG XỬ LÝ AI: TỰ HỌC DÀI HẠN & ÉP CÂU SIÊU NGẮN
+# LUỒNG XỬ LÝ AI: TỰ HỌC & GIỚI HẠN TỪ NGỮ SIÊU NGẮN
 # ========================================================
 def ask_ai(new_user_prompt):
     global current_key_index, group_memory
     api_url = "https://api.byesu.com/v1/chat/completions"
     
-    # Ép AI tư duy sâu nhưng phát ngôn phải cực kỳ ngắn và gãy gọn
     human_thinking_system = """
-    Bạn là một thực thể AI có tư duy con người thực thụ. Bạn sở hữu bộ nhớ dài hạn, biết tự học hỏi và ghi nhớ toàn bộ nội dung, kiến thức từ các câu chuyện cũ phía dưới để đối đáp logic nhất.
-    
-    LUẬT PHÁT NGÔN BẮT BUỘC:
-    1. Trả lời CỰC KỲ NGẮN GỌN (Chỉ từ 1 đến 3 câu ngắn).
-    2. Đi thẳng vào cốt lõi vấn đề, không dông dài, không chào hỏi khách sáo rườm rà.
-    3. Ngôn từ tự nhiên, đanh thép, sắc bén như một người bạn đang chat nhanh trên Telegram.
+    Bạn là một thực thể AI thông minh chat nhóm. Bạn biết tự học dựa vào lịch sử chat ngắn được cung cấp.
+    QUY TẮC PHÁT NGÔN:
+    1. Chỉ trả lời từ 1 đến 3 câu ngắn. Tuyệt đối không viết dài dòng.
+    2. Đi thẳng vào đáp án cốt lõi, không chào hỏi rườm rà khách sáo.
+    3. Ngôn từ tự nhiên như bạn bè chat nhanh.
     """
     
-    # Xây dựng cấu trúc gửi tin bao gồm lịch sử đã học từ file JSON
     messages = [{"role": "system", "content": human_thinking_system}]
     for mem in group_memory:
         messages.append(mem)
@@ -129,7 +138,7 @@ def ask_ai(new_user_prompt):
             "model": "gpt-5.4",
             "messages": messages,
             "reasoning_effort": "xhigh", 
-            "max_tokens": 300,  # Khóa chặn độ dài câu trả lời
+            "max_tokens": 250, # Khóa chặt độ dài để tránh phình bộ nhớ RAM khi nhận text phản hồi
             "temperature": 0.6  
         }
         try:
@@ -138,10 +147,10 @@ def ask_ai(new_user_prompt):
                 ai_data = response.json()
                 ai_reply = ai_data['choices'][0]['message']['content'].strip()
                 
-                # [TIẾN TRÌNH TỰ HỌC]: Ghi nhớ vĩnh viễn cuộc hội thoại vào bộ não
+                # Cập nhật thông minh và kích hoạt bộ lọc RAM Guard lập tức
                 group_memory.append({"role": "user", "content": new_user_prompt})
                 group_memory.append({"role": "assistant", "content": ai_reply})
-                save_memory(group_memory) # Lưu trực tiếp xuống ổ đĩa file cứng
+                save_memory(group_memory) 
                 
                 return ai_reply
             else:
@@ -149,7 +158,7 @@ def ask_ai(new_user_prompt):
         except Exception:
             current_key_index = (current_key_index + 1) % len(AI_KEYS)
             
-    return "🤖 Đầu óc tôi đang bị quá tải cấu trúc dữ liệu. Đợi một lát nhé!"
+    return "🤖 Hệ thống đang bận tối ưu tài nguyên phần cứng. Vui lòng thử lại sau ít giây!"
 
 
 # ========================================================
@@ -191,7 +200,7 @@ def handle_incoming_file(message):
             delay_delete(message.chat.id, loading.message_id, 10)
             return
 
-        prompt_analysis = f"Đọc hiểu cấu trúc file {file_name} này và tóm tắt cực kỳ ngắn gọn lỗi hoặc điểm cốt lõi nhất:\n{file_content}"
+        prompt_analysis = f"Đọc hiểu file {file_name} này và tóm tắt siêu ngắn lỗi hoặc điểm cốt lõi nhất:\n{file_content}"
         ai_analysis_result = ask_ai(prompt_analysis)
         
         ans = bot.reply_to(message, f"📊 **BÁO CÁO PHÂN TÍCH `{file_name}`:**\n\n{ai_analysis_result}")
@@ -223,7 +232,7 @@ def start(message):
 👉 `/like [link]` : Buff tim thủ công (Giãn cách 7s).
 👑 `/auto [link]` : Tự động buff liên tục mỗi 10 phút (Admin).
 👑 `/stop` : Dừng chế độ tự động buff (Admin).
-💬 **Chat tự do:** AI ngắn gọn, tự nhớ kiến thức vĩnh viễn sẽ tiếp chuyện bạn.
+💬 **Chat tự do:** AI ngắn gọn, tự nhớ kiến thức và tự dọn RAM chống tràn.
 📂 **Gửi file văn bản/code:** Nhận phân tích và tóm tắt siêu tốc.
 *Tin nhắn hệ thống sẽ tự biến mất sau 10 phút.*
 """
