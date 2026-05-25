@@ -33,8 +33,8 @@ DELETE_DELAY = 600
 
 # 💾 FILE DATABASE BỘ NHỚ VĨNH VIỄN CỦA AI
 MEMORY_FILE = "bot_memory.json"
-MAX_MEMORY_KEYS = 20     # Giới hạn tối đa 20 tin nhắn trong RAM đệm
-MAX_FILE_SIZE_KB = 50    # Giới hạn file tối đa 50KB để bảo vệ RAM tuyệt đối
+MAX_MEMORY_KEYS = 100     # Giới hạn tối đa 20 tin nhắn trong RAM đệm
+MAX_FILE_SIZE_KB = 1000    # Giới hạn file tối đa 50KB để bảo vệ RAM tuyệt đối
 
 # DANH SÁCH 2 API KEY AI CỦA BẠN
 AI_KEYS = [
