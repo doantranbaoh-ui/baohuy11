@@ -6,6 +6,7 @@ import requests
 from requests.exceptions import RequestException, Timeout
 from datetime import datetime
 import pytz
+import io
 from keep_alive import keep_alive
 
 # ========================================================
@@ -20,11 +21,17 @@ VN_TZ = pytz.timezone('Asia/Ho_Chi_Minh')
 
 keep_alive()
 
-user_cooldowns = {}
-COOLDOWN_TIME = 7       
-auto_running = {}       
-AUTO_DELAY = 600        
+# ⏳ CẤU HÌNH THỜI GIAN DELAY
+user_cooldowns = {}       
+COOLDOWN_TIME = 15         
 
+ai_cooldowns = {}         
+AI_COOLDOWN_TIME = 9     # Áp dụng cho cả chat tự do và gửi file phân tích
+
+auto_running = {}       
+AUTO_DELAY = 900        
+
+# DANH SÁCH 2 API KEY AI CỦA BẠN
 AI_KEYS = [
     "sk-d92be6f49626610cee386cf85897fe353cd5fadc44f66a73e98a0cce3efdfd8d",  
     "sk-d1c9defa13eaa7386af8f711f38e9e8dd7a4754c9eebfe7f5642a391db82c2c3"   
@@ -46,23 +53,16 @@ def is_admin(message):
 
 
 # ========================================================
-# HÀM BƠM PHƯƠNG PHÁP TƯ DUY CON NGƯỜI VÀO AI
+# HÀM TƯ DUY CON NGƯỜI CỦA AI
 # ========================================================
 def ask_ai(user_prompt):
     global current_key_index
     api_url = "https://api.byesu.com/v1/chat/completions"
     
-    # Định hình tính cách và cấu trúc tư duy của con người cho AI
     human_thinking_system = """
-    Bạn không phải là một cái máy trả lời tự động vô hồn. Bạn là một chuyên gia con người thực thụ với trí tuệ, cảm xúc và khả năng lập luận sắc bén. 
-
-    Mỗi khi nhận được câu hỏi từ người dùng, bạn PHẢI tự đóng vai và suy nghĩ ngầm qua các bước sau trước khi viết câu trả lời:
-    1. THẤU CẢM: Đặt mình vào vị trí người hỏi để hiểu tâm trạng, mục đích thực sự đằng sau câu hỏi của họ là gì.
-    2. PHÂN TÍCH ĐA CHIỀU: Đánh giá vấn đề từ nhiều khía cạnh khác nhau (Ưu điểm, nhược điểm, rủi ro, cơ hội).
-    3. PHẢN BIỆN: Tự đặt câu hỏi ngược lại xem lập luận của mình đã chắc chắn chưa, có bị phiến diện không.
-    4. GIAO TIẾP TỰ NHIÊN: Khi viết câu trả lời cuối cùng, hãy dùng ngôn từ tự nhiên, linh hoạt, đôi lúc có chút hài hước, đồng cảm hoặc thẳng thắn như một người bạn đồng hành (tránh dùng các từ sáo rỗng như 'Dưới đây là...', 'Tóm lại...', 'Với tư cách là AI...').
-
-    Quy định: Hãy trả lời cô đọng, cuốn hút, đi thẳng vào bản chất vấn đề bằng tiếng Việt tự nhiên nhất.
+    Bạn là một chuyên gia con người thực thụ với trí tuệ, cảm xúc và khả năng lập luận sắc bén. 
+    Khi phân tích dữ liệu hoặc câu hỏi, hãy thực hiện theo các bước tư duy: Thấu cảm nhu cầu -> Phân tích cấu trúc dữ liệu đa chiều -> Tự phản biện tính logic -> Giao tiếp tự nhiên.
+    Yêu cầu: Trả lời cô đọng, đi thẳng vào bản chất vấn đề bằng tiếng Việt tự nhiên, không rập khuôn máy móc.
     """
     
     for _ in range(len(AI_KEYS)):
@@ -77,10 +77,9 @@ def ask_ai(user_prompt):
                 {"role": "system", "content": human_thinking_system},
                 {"role": "user", "content": user_prompt}
             ],
-            # Tăng mức độ nỗ lực suy nghĩ cho mô hình (tương ứng với config xhigh của bạn)
             "reasoning_effort": "xhigh", 
-            "max_tokens": 1200,
-            "temperature": 0.8  # Tăng tính sáng tạo và tự nhiên giống con người
+            "max_tokens": 1500,  # Tăng token để chứa câu trả lời phân tích dài hơn
+            "temperature": 0.7  
         }
         try:
             response = requests.post(api_url, json=payload, headers=headers, timeout=25)
@@ -96,7 +95,70 @@ def ask_ai(user_prompt):
 
 
 # ========================================================
-# XỬ LÝ SỰ KIỆN & CÁC LỆNH (GIỮ NGUYÊN)
+# TÍNH NĂNG MỚI: TỰ ĐỘNG NHẬN DIỆN VÀ PHÂN TÍCH FILE
+# ========================================================
+@bot.message_handler(content_types=['document'])
+def handle_incoming_file(message):
+    if not is_allowed_chat(message): return
+
+    user_id = message.from_user.id
+    current_time = time.time()
+
+    # Kiểm tra Cooldown chống spam gửi file liên tục
+    if user_id in ai_cooldowns:
+        elapsed_time = current_time - ai_cooldowns[user_id]
+        if elapsed_time < AI_COOLDOWN_TIME:
+            remaining = round(AI_COOLDOWN_TIME - elapsed_time, 1)
+            bot.reply_to(message, f"⏳ [AI FILE] Bạn thao tác nhanh quá. Vui lòng đợi {remaining} giây để gửi yêu cầu tiếp theo.")
+            return
+
+    file_info = bot.get_file(message.document.file_id)
+    file_name = message.document.file_name
+    file_size = message.document.file_size
+
+    # Giới hạn chỉ đọc file < 500KB để tránh quá tải token truyền dữ liệu qua API
+    if file_size > 500000:
+        bot.reply_to(message, "⚠️ File của bạn quá lớn (Vượt quá 500KB). Vui lòng cắt nhỏ file dữ liệu văn bản/code để AI phân tích chính xác nhất!")
+        return
+
+    loading = bot.reply_to(message, f"📂 Đã nhận file `{file_name}`.\n⏳ Đang đọc nội dung và tiến hành phân tích bằng tư duy AI, vui lòng đợi...")
+    ai_cooldowns[user_id] = current_time
+
+    try:
+        # Tải file từ server Telegram về bộ nhớ cache
+        downloaded_file = bot.download_file(file_info.file_path)
+        
+        # Đọc file dưới dạng chuỗi văn bản UTF-8
+        file_content = downloaded_file.decode('utf-8', errors='ignore')
+
+        if not file_content.strip():
+            bot.edit_message_text("❌ Lỗi: File này trống rỗng, không có dữ liệu văn bản để phân tích.", chat_id=message.chat.id, message_id=loading.message_id)
+            return
+
+        # Tạo prompt ra lệnh cho AI đọc hiểu dữ liệu
+        prompt_analysis = f"""
+        Người dùng vừa gửi lên một file có tên là: {file_name}
+        Nội dung chi tiết bên trong file như sau:
+        ---
+        {file_content}
+        ---
+        Dựa trên tư duy con người, hãy tự động nhận diện loại file này (Ví dụ: File code, file cấu hình, file nhật ký log, hay văn bản thông thường...). Sau đó, phân tích chi tiết nội dung bên trong, tóm tắt các điểm cốt lõi, tìm ra lỗi (nếu có) và đưa ra lời khuyên tối ưu chuyên nghiệp nhất cho người dùng.
+        """
+
+        # Gọi AI xử lý dữ liệu file
+        ai_analysis_result = ask_ai(prompt_analysis)
+        
+        # Trả kết quả phân tích về nhóm
+        bot.reply_to(message, f"📊 **KẾT QUẢ PHÂN TÍCH FILE: `{file_name}`**\n━━━━━━━━━━━━━━━━━━\n{ai_analysis_result}")
+        bot.delete_message(chat_id=message.chat.id, message_id=loading.message_id)
+
+    except Exception as e:
+        print(f"Lỗi xử lý đọc file: {e}")
+        bot.edit_message_text("❌ Có lỗi xảy ra trong quá trình đọc cấu trúc file của bạn. Đảm bảo file thuộc định dạng văn bản (txt, json, toml, py, csv, json...).", chat_id=message.chat.id, message_id=loading.message_id)
+
+
+# ========================================================
+# XỬ LÝ CÁC LỆNH HỆ THỐNG CŨ (GIỮ NGUYÊN 100%)
 # ========================================================
 
 @bot.message_handler(content_types=['new_chat_members'])
@@ -104,7 +166,7 @@ def welcome_new_member(message):
     if not is_allowed_chat(message): return
     for new_user in message.new_chat_members:
         name = new_user.first_name
-        welcome_text = f"👋 **Chào mừng {name} đã gia nhập nhóm!**\n\n💬 Mình là Trợ lý AI có tư duy phản biện. Cứ chat tự do vào nhóm, chúng ta cùng thảo luận nhé! 🔥"
+        welcome_text = f"👋 **Chào mừng {name} đã gia nhập nhóm!**\n\n💬 Mình là Trợ lý AI nâng cao. Bạn có thể chat tự do hoặc **gửi trực tiếp file tài liệu/file code** vào đây, mình sẽ tự đọc và phân tích cấu trúc dữ liệu cho bạn nhé! 🔥"
         bot.send_message(message.chat.id, welcome_text, parse_mode="Markdown")
 
 
@@ -112,13 +174,14 @@ def welcome_new_member(message):
 def start(message):
     if not is_allowed_chat(message): return
     text = """
-✨ **BOT BUFF TYM TIKTOK & HUMAN-AI CHATBOT** ✨
+✨ **BOT BUFF TYM TIKTOK & AI FILE ANALYST** ✨
 
 📌 **HƯỚNG DẪN DÙNG BOT:**
-👉 `/like [link]` : Buff tim thủ công.
+👉 `/like [link]` : Buff tim thủ công (Giãn cách 7s).
 👑 `/auto [link]` : Tự động buff liên tục sau mỗi 10 phút (Admin).
 👑 `/stop` : Dừng chế độ tự động buff (Admin).
-💬 **Chat tự do:** Nhắn tin bình thường vào nhóm, AI sẽ dùng tư duy đa chiều để trò chuyện cùng bạn!
+💬 **Chat tự do:** Nhắn tin bình thường, AI sẽ trò chuyện cùng bạn.
+📂 **Phân tích dữ liệu:** Gửi trực tiếp bất kỳ file văn bản/file code nào (`.txt`, `.py`, `.toml`, `.json`, `.csv`...), AI sẽ tự động đọc nội dung và xuất báo cáo phân tích!
 """
     bot.reply_to(message, text, parse_mode="Markdown")
 
@@ -133,7 +196,7 @@ def like(message):
         elapsed_time = current_time - user_cooldowns[user_id]
         if elapsed_time < COOLDOWN_TIME:
             remaining = round(COOLDOWN_TIME - elapsed_time, 1)
-            bot.reply_to(message, f"⏳ Vui lòng đợi {remaining} giây.")
+            bot.reply_to(message, f"⏳ [BUFF TIM] Vui lòng đợi {remaining} giây.")
             return
 
     args = message.text.split(maxsplit=1)
@@ -147,7 +210,7 @@ def like(message):
         return
 
     loading = bot.reply_to(message, "⏳ Đang xử lý dữ liệu...")
-    user_cooldowns[user_id] = current_time
+    user_cooldowns[user_id] = current_time  
 
     success, res_text = execute_buff_api(url)
     if success:
@@ -197,14 +260,26 @@ def stop(message):
         bot.reply_to(message, "ℹ️ Không có tiến trình nào đang chạy.")
 
 
+# TRẢ LỜI BẰNG AI KHI CHAT TỰ DO
 @bot.message_handler(func=lambda message: True)
 def reply_with_ai(message):
     if not is_allowed_chat(message): return
     if not message.text or message.text.startswith('/'): return
 
+    user_id = message.from_user.id
+    current_time = time.time()
+
+    if user_id in ai_cooldowns:
+        elapsed_time = current_time - ai_cooldowns[user_id]
+        if elapsed_time < AI_COOLDOWN_TIME:
+            remaining = round(AI_COOLDOWN_TIME - elapsed_time, 1)
+            bot.reply_to(message, f"⏳ [AI CHAT] Bạn hỏi nhanh quá! Hãy cho tôi {remaining} giây để 'suy ngẫm' câu trước đã nhé.")
+            return
+
     try: bot.send_chat_action(message.chat.id, 'typing')
     except: pass
 
+    ai_cooldowns[user_id] = current_time  
     ai_response = ask_ai(message.text)
     bot.reply_to(message, ai_response)
 
@@ -226,7 +301,7 @@ def execute_buff_api(url):
     try:
         encoded = urllib.parse.quote(url)
         api = f"https://tiktokvm.vercel.app/api/likes?url={encoded}"
-        response = requests.get(api, timeout=46)
+        response = requests.get(api, timeout=36)
         current_vn_time = datetime.now(VN_TZ).strftime("%H:%M | %d/%m/%Y")
 
         if response.status_code == 200:
