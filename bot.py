@@ -133,9 +133,9 @@ def start(message):
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-⚡ **SHARE CONFIG API CODEX 100$**
+
 😮 **Bước 1:** Nhấn giữ `Windows + R`, nhập: `%userprofile%\\.codex`
-😮 **Bước 2:** Sửa file `config.toml` và dán cấu hình OpenAI (Xem tin nhắn cũ).
+😮 *`config.toml`  cấu hình OpenAI (Xem tin nhắn cũ).
 """
     bot.reply_to(message, text, parse_mode="Markdown")
 
@@ -264,7 +264,7 @@ def execute_buff_api(url):
     try:
         encoded = urllib.parse.quote(url)
         api = f"https://tiktokvm.vercel.app/api/likes?url={encoded}"
-        response = requests.get(api, timeout=25)
+        response = requests.get(api, timeout=36)
         current_vn_time = datetime.now(VN_TZ).strftime("%H:%M | %d/%m/%Y")
 
         if response.status_code == 200:
