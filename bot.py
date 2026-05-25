@@ -25,7 +25,7 @@ print(f"👑 Admin tối cao: {ADMIN_ID}")
 user_cooldowns = {}
 COOLDOWN_TIME = 7       # Thời gian giãn cách giữa các lần /like (giây)
 auto_running = {}       # Lưu trạng thái auto: {user_id: True/False}
-AUTO_DELAY = 800        # Khoảng cách giữa các lần auto (10 phút)
+AUTO_DELAY = 1000        # Khoảng cách giữa các lần auto (10 phút)
 
 
 # ========================================================
