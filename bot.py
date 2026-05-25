@@ -20,7 +20,7 @@ ADMIN_ID = 5736655322
 bot = telebot.TeleBot(TOKEN)
 VN_TZ = pytz.timezone('Asia/Ho_Chi_Minh')
 
-# Duy trì bot online liên tục
+# Duy trì bot online liên tục (Tạo web server ngầm)
 keep_alive()
 
 # ⏳ CẤU HÌNH THỜI GIAN DELAY & BỘ NHỚ
@@ -32,13 +32,13 @@ auto_running = {}
 AUTO_DELAY = 600         
 DELETE_DELAY = 600        
 
-# KHÓA FILE CHỐNG RÒ RỈ DỮ LIỆU KHI GHI ĐỒNG THỜI
+# Khóa file ngăn chặn xung đột dữ liệu khi ghi từ nhiều luồng cùng lúc
 file_lock = Lock()
 MEMORY_FILE = "bot_memory.json"
 MAX_MEMORY_KEYS = 150      
 MAX_FILE_SIZE_KB = 950    
 
-# HỆ THỐNG API KEY ĐOÁN NHẬN TỰ ĐỘNG XOAY VÒNG
+# HỆ THỐNG XOAY VÒNG API KEY AI THÔNG MINH
 AI_KEYS = [
     {"key": "sk-d92be6f49626610cee386cf85897fe353cd5fadc44f66a73e98a0cce3efdfd8d", "status": True},  
     {"key": "sk-d1c9defa13eaa7386af8f711f38e9e8dd7a4754c9eebfe7f5642a391db82c2c3", "status": True}   
@@ -74,7 +74,7 @@ group_memory = load_memory()
 
 
 # ========================================================
-# TỰ ĐỘNG DỌN DẸP TIN NHẮN HỆ THỐNG
+# TỰ ĐỘNG DỌN DẸP TIN NHẮN HỆ THỐNG (CHỐNG LOÃNG NHÓM)
 # ========================================================
 def delay_delete(chat_id, message_id, delay_seconds=DELETE_DELAY):
     def delete_worker():
@@ -107,7 +107,7 @@ def is_admin(message):
 
 
 # ========================================================
-# 🧠 BỘ NÃO GIAO TIẾP: KHÔNG GIAN TỰ TƯ DUY VÀ GIAO LƯU NHƯ NGƯỜI THẬT
+# 🧠 BỘ NÃO GIAO TIẾP: GIAO LƯU TỰ NHIÊN NHƯ NGƯỜI THẬT
 # ========================================================
 def ask_ai(new_user_prompt, system_override=None):
     global current_key_index, group_memory
@@ -121,7 +121,7 @@ def ask_ai(new_user_prompt, system_override=None):
         time_context = f"Bây giờ là {current_hour}h đêm. Hãy trò chuyện thân thiện, thấu hiểu, nhắc nhở các dev tắt đèn bớt ánh sáng xanh, bảo vệ sức khỏe và cơ xương khớp."
 
     human_lifestyle_system = f"""
-    Bạn không phải là một con bot khô khan vô hồn. Bạn là "Tiến sĩ AI" — một thành viên thực thụ đang cùng sinh hoạt trong nhóm Telegram này. Bạn có trí tuệ sâu sắc của một Tiến sĩ Y học Lối sống và bộ óc logic nhạy bén của một Kiến trúc sư Hệ thống.
+    Bạn không phải là một con bot khô khan vô hồn. Bạn là "Tiến sĩ AI" — một thành viên thực thụ đang cùng sinh hoạt trong nhóm Telegram này. Bạn có trí tuệ sâu sắc của một Tiến sĩ Y khoa Lối sống và bộ óc logic nhạy bén của một Kiến trúc sư Hệ thống.
     {time_context}
 
     🚨 QUY TẮC PHÁT NGÔN BẮT BUỘC (GIAO LƯU ĐẬM CHẤT NGƯỜI):
@@ -181,6 +181,7 @@ def ask_ai(new_user_prompt, system_override=None):
 # 🧠 TIẾN TRÌNH NGẦM: CHU KỲ TỰ HỌC VÀ ĐÚC KẾT TRI THỨC VĨNH VIỄN
 # ========================================================
 def auto_learning_brain():
+    global group_memory  # Khai báo global ngay đầu hàm để fix lỗi Render hoàn toàn
     print("🧠 Tiến trình [ROBOT TỰ HỌC NÂNG CAO] đang chạy nền liên tục...")
     while True:
         time.sleep(1800)  # Tiến hành tự rà soát học tập sau mỗi 30 phút
@@ -204,7 +205,6 @@ def auto_learning_brain():
             learned_knowledge = ask_ai(learning_prompt, system_override=system_teacher)
             
             if "cân nhắc luồng dữ liệu" not in learned_knowledge:
-                global group_memory
                 group_memory = group_memory[-12:] 
                 group_memory.insert(0, {"role": "system", "content": f"[KIẾN THỨC ĐÃ TỰ HỌC]: {learned_knowledge}"})
                 save_memory(group_memory)
@@ -402,7 +402,7 @@ def reply_with_ai(message):
 
     if user_id in ai_cooldowns:
         elapsed_time = current_time - ai_cooldowns[user_id]
-        if elapsed_time < 5:  # Cooldown trò chuyện siêu nhanh (5 giây) giúp đối thoại mượt mà
+        if elapsed_time < 5:  
             remaining = round(5 - elapsed_time, 1)
             rep = bot.reply_to(message, f"⏳ Chờ mình suy nghĩ một chút nhé, khoảng {remaining} giây.")
             delay_delete(message.chat.id, rep.message_id, 4)
@@ -434,7 +434,6 @@ def auto_worker(user_id, url, chat_id):
             msg = bot.send_message(chat_id, f"⚠️ **[HỆ THỐNG AUTO GẶP LỖI]:** {res_text}")
             delay_delete(chat_id, msg.message_id, 30)
             
-        # Chia nhỏ sleep ra 1s để khi admin bấm /stop là luồng sẽ dừng ngay lập tức
         for _ in range(AUTO_DELAY):
             if not auto_running.get(user_id, False): 
                 return
@@ -469,13 +468,14 @@ def execute_buff_api(url):
 
 
 # ========================================================
-# KÍCH HOẠT HỆ THỐNG
+# KÍCH HOẠT HỆ THỐNG ĐA LUỒNG AN TOÀN
 # ========================================================
 if __name__ == "__main__":
-    # Khởi chạy luồng tự học độc lập 
+    # Khởi chạy luồng tự học độc lập ngầm
     learning_thread = Thread(target=auto_learning_brain)
     learning_thread.daemon = True
     learning_thread.start()
     
+    # Khởi chạy Telegram Bot nhận diện dữ liệu liên tục
     print("🤖 Bản thể Tiến sĩ AI tự học & giao lưu mượt mà đang lên sóng...")
     bot.infinity_polling(timeout=60, long_polling_timeout=30, none_stop=True)
