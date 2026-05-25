@@ -6,6 +6,8 @@ import requests
 from requests.exceptions import RequestException, Timeout
 from datetime import datetime
 import pytz
+import os
+import json
 from keep_alive import keep_alive
 
 # ========================================================
@@ -23,13 +25,14 @@ keep_alive()
 # ⏳ CẤU HÌNH THỜI GIAN DELAY
 user_cooldowns = {}       
 COOLDOWN_TIME = 7         
-
 ai_cooldowns = {}         
 AI_COOLDOWN_TIME = 15     
-
 auto_running = {}       
 AUTO_DELAY = 600        
-DELETE_DELAY = 600       # Thời gian tự động xóa tin nhắn (600 giây = 10 phút)
+DELETE_DELAY = 600       # 10 phút tự động dọn tin nhắn
+
+# 💾 FILE DATABASE BỘ NHỚ VĨNH VIỄN CỦA AI
+MEMORY_FILE = "bot_memory.json"
 
 # DANH SÁCH 2 API KEY AI CỦA BẠN
 AI_KEYS = [
@@ -40,19 +43,41 @@ current_key_index = 0
 
 
 # ========================================================
-# HÀM TỰ ĐỘNG XÓA TIN NHẮN CHẠY NGẦM (NEW)
+# CƠ CHẾ ĐỌC / GHI BỘ NHỚ ĐỂ TỰ HỌC VĨNH VIỄN
+# ========================================================
+def load_memory():
+    if os.path.exists(MEMORY_FILE):
+        try:
+            with open(MEMORY_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except:
+            return []
+    return []
+
+def save_memory(memory_data):
+    try:
+        # Giới hạn nhớ tối đa 15 cặp hội thoại gần nhất để tránh tràn băng thông API công nghệ cao
+        if len(memory_data) > 30:
+            memory_data = memory_data[-30:]
+        with open(MEMORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(memory_data, f, ensure_ascii=False, indent=4)
+    except Exception as e:
+        print(f"⚠️ Không thể lưu bộ nhớ học tập: {e}")
+
+# Tải bộ nhớ lên RAM ngay khi bot vừa bật nguồn
+group_memory = load_memory()
+
+
+# ========================================================
+# HÀM TỰ ĐỘNG XÓA TIN NHẮN CHẠY NGẦM
 # ========================================================
 def delay_delete(chat_id, message_id, delay_seconds=DELETE_DELAY):
     def delete_worker():
         time.sleep(delay_seconds)
         try:
             bot.delete_message(chat_id, message_id)
-            print(f"🗑️ Đã tự động xóa tin nhắn ID {message_id} tại nhóm {chat_id} sau 10 phút.")
-        except Exception as e:
-            # Lỗi xảy ra nếu tin nhắn đã bị admin xóa trước đó hoặc bot bị tước quyền Admin trong nhóm
-            print(f"⚠️ Không thể xóa tin nhắn {message_id}: {e}")
-
-    # Chạy ngầm độc lập để không làm nghẽn luồng xử lý chính của Bot
+        except:
+            pass
     thread = Thread(target=delete_worker)
     thread.daemon = True
     thread.start()
@@ -71,15 +96,28 @@ def is_admin(message):
     return False
 
 
-def ask_ai(user_prompt):
-    global current_key_index
+# ========================================================
+# LUỒNG XỬ LÝ AI: TỰ HỌC DÀI HẠN & ÉP CÂU SIÊU NGẮN
+# ========================================================
+def ask_ai(new_user_prompt):
+    global current_key_index, group_memory
     api_url = "https://api.byesu.com/v1/chat/completions"
     
+    # Ép AI tư duy sâu nhưng phát ngôn phải cực kỳ ngắn và gãy gọn
     human_thinking_system = """
-    Bạn là một chuyên gia con người thực thụ với trí tuệ, cảm xúc và khả năng lập luận sắc bén. 
-    Khi phân tích dữ liệu hoặc câu hỏi, hãy thực hiện theo các bước tư duy: Thấu cảm nhu cầu -> Phân tích cấu trúc dữ liệu đa chiều -> Tự phản biện tính logic -> Giao tiếp tự nhiên.
-    Yêu cầu: Trả lời cô đọng, đi thẳng vào bản chất vấn đề bằng tiếng Việt tự nhiên, không rập khuôn máy móc.
+    Bạn là một thực thể AI có tư duy con người thực thụ. Bạn sở hữu bộ nhớ dài hạn, biết tự học hỏi và ghi nhớ toàn bộ nội dung, kiến thức từ các câu chuyện cũ phía dưới để đối đáp logic nhất.
+    
+    LUẬT PHÁT NGÔN BẮT BUỘC:
+    1. Trả lời CỰC KỲ NGẮN GỌN (Chỉ từ 1 đến 3 câu ngắn).
+    2. Đi thẳng vào cốt lõi vấn đề, không dông dài, không chào hỏi khách sáo rườm rà.
+    3. Ngôn từ tự nhiên, đanh thép, sắc bén như một người bạn đang chat nhanh trên Telegram.
     """
+    
+    # Xây dựng cấu trúc gửi tin bao gồm lịch sử đã học từ file JSON
+    messages = [{"role": "system", "content": human_thinking_system}]
+    for mem in group_memory:
+        messages.append(mem)
+    messages.append({"role": "user", "content": new_user_prompt})
     
     for _ in range(len(AI_KEYS)):
         active_key = AI_KEYS[current_key_index]
@@ -89,27 +127,34 @@ def ask_ai(user_prompt):
         }
         payload = {
             "model": "gpt-5.4",
-            "messages": [
-                {"role": "system", "content": human_thinking_system},
-                {"role": "user", "content": user_prompt}
-            ],
+            "messages": messages,
             "reasoning_effort": "xhigh", 
-            "max_tokens": 1500,  
-            "temperature": 0.7  
+            "max_tokens": 300,  # Khóa chặn độ dài câu trả lời
+            "temperature": 0.6  
         }
         try:
             response = requests.post(api_url, json=payload, headers=headers, timeout=25)
             if response.status_code == 200:
                 ai_data = response.json()
-                return ai_data['choices'][0]['message']['content']
+                ai_reply = ai_data['choices'][0]['message']['content'].strip()
+                
+                # [TIẾN TRÌNH TỰ HỌC]: Ghi nhớ vĩnh viễn cuộc hội thoại vào bộ não
+                group_memory.append({"role": "user", "content": new_user_prompt})
+                group_memory.append({"role": "assistant", "content": ai_reply})
+                save_memory(group_memory) # Lưu trực tiếp xuống ổ đĩa file cứng
+                
+                return ai_reply
             else:
                 current_key_index = (current_key_index + 1) % len(AI_KEYS)
-        except Exception as e:
+        except Exception:
             current_key_index = (current_key_index + 1) % len(AI_KEYS)
             
-    return "🤖 Server AI hiện tại đang bận xử lý logic phức tạp. Bạn thử lại nhé!"
+    return "🤖 Đầu óc tôi đang bị quá tải cấu trúc dữ liệu. Đợi một lát nhé!"
 
 
+# ========================================================
+# TỰ ĐỘNG ĐỌC VÀ PHÂN TÍCH FILE (CÓ HẸN GIỜ XÓA)
+# ========================================================
 @bot.message_handler(content_types=['document'])
 def handle_incoming_file(message):
     if not is_allowed_chat(message): return
@@ -121,8 +166,8 @@ def handle_incoming_file(message):
         elapsed_time = current_time - ai_cooldowns[user_id]
         if elapsed_time < AI_COOLDOWN_TIME:
             remaining = round(AI_COOLDOWN_TIME - elapsed_time, 1)
-            rep = bot.reply_to(message, f"⏳ [AI FILE] Bạn thao tác nhanh quá. Vui lòng đợi {remaining} giây.")
-            delay_delete(message.chat.id, rep.message_id, 10) # Xóa nhắc nhở sau 10s cho sạch nhóm
+            rep = bot.reply_to(message, f"⏳ Vui lòng đợi {remaining} giây.")
+            delay_delete(message.chat.id, rep.message_id, 5)
             return
 
     file_info = bot.get_file(message.document.file_id)
@@ -130,11 +175,11 @@ def handle_incoming_file(message):
     file_size = message.document.file_size
 
     if file_size > 500000:
-        rep = bot.reply_to(message, "⚠️ File của bạn quá lớn (Vượt quá 500KB).")
-        delay_delete(message.chat.id, rep.message_id, 15)
+        rep = bot.reply_to(message, "⚠️ Dung lượng file không được vượt quá 500KB.")
+        delay_delete(message.chat.id, rep.message_id, 10)
         return
 
-    loading = bot.reply_to(message, f"📂 Đã nhận file `{file_name}`.\n⏳ Đang đọc nội dung và tiến hành phân tích bằng tư duy AI, vui lòng đợi...")
+    loading = bot.reply_to(message, f"📂 Đã nhận file `{file_name}`. Đang quét dữ liệu...")
     ai_cooldowns[user_id] = current_time
 
     try:
@@ -142,39 +187,30 @@ def handle_incoming_file(message):
         file_content = downloaded_file.decode('utf-8', errors='ignore')
 
         if not file_content.strip():
-            bot.edit_message_text("❌ Lỗi: File này trống rỗng, không có dữ liệu văn bản để phân tích.", chat_id=message.chat.id, message_id=loading.message_id)
-            delay_delete(message.chat.id, loading.message_id, 15)
+            bot.edit_message_text("❌ File trống.", chat_id=message.chat.id, message_id=loading.message_id)
+            delay_delete(message.chat.id, loading.message_id, 10)
             return
 
-        prompt_analysis = f"""
-        Người dùng vừa gửi lên một file có tên là: {file_name}
-        Nội dung chi tiết bên trong file như sau:
-        ---
-        {file_content}
-        ---
-        Dựa trên tư duy con người, hãy tự động nhận diện loại file này. Sau đó, phân tích chi tiết nội dung bên trong, tóm tắt các điểm cốt lõi, tìm ra lỗi (nếu có) và đưa ra lời khuyên tối ưu chuyên nghiệp nhất cho người dùng.
-        """
-
+        prompt_analysis = f"Đọc hiểu cấu trúc file {file_name} này và tóm tắt cực kỳ ngắn gọn lỗi hoặc điểm cốt lõi nhất:\n{file_content}"
         ai_analysis_result = ask_ai(prompt_analysis)
-        ans = bot.reply_to(message, f"📊 **KẾT QUẢ PHÂN TÍCH FILE: `{file_name}`**\n━━━━━━━━━━━━━━━━━━\n{ai_analysis_result}")
-        bot.delete_message(chat_id=message.chat.id, message_id=loading.message_id)
         
-        # ⏱️ Tự động xóa kết quả phân tích file sau 10 phút
+        ans = bot.reply_to(message, f"📊 **BÁO CÁO PHÂN TÍCH `{file_name}`:**\n\n{ai_analysis_result}")
+        bot.delete_message(chat_id=message.chat.id, message_id=loading.message_id)
         delay_delete(message.chat.id, ans.message_id)
 
-    except Exception as e:
-        bot.edit_message_text("❌ Có lỗi xảy ra trong quá trình đọc cấu trúc file của bạn.", chat_id=message.chat.id, message_id=loading.message_id)
-        delay_delete(message.chat.id, loading.message_id, 15)
+    except Exception:
+        bot.edit_message_text("❌ Lỗi đọc cấu trúc file văn bản.", chat_id=message.chat.id, message_id=loading.message_id)
+        delay_delete(message.chat.id, loading.message_id, 10)
 
 
+# ========================================================
+# XỬ LÝ CÁC LỆNH HỆ THỐNG
+# ========================================================
 @bot.message_handler(content_types=['new_chat_members'])
 def welcome_new_member(message):
     if not is_allowed_chat(message): return
     for new_user in message.new_chat_members:
-        name = new_user.first_name
-        welcome_text = f"👋 **Chào mừng {name} đã gia nhập nhóm!**\n\n💬 Mình là Trợ lý AI nâng cao. Bạn có thể chat tự do hoặc gửi trực tiếp file tài liệu vào đây nhé! 🔥"
-        msg = bot.send_message(message.chat.id, welcome_text, parse_mode="Markdown")
-        # ⏱️ Xóa tin nhắn chào mừng sau 10 phút cho đỡ loãng nhóm
+        msg = bot.send_message(message.chat.id, f"👋 Chào {new_user.first_name}! Chat tự do đi, tôi sẽ nghe và tự ghi nhớ bài học.")
         delay_delete(message.chat.id, msg.message_id)
 
 
@@ -182,15 +218,14 @@ def welcome_new_member(message):
 def start(message):
     if not is_allowed_chat(message): return
     text = """
-✨ **BOT BUFF TYM TIKTOK & AI FILE ANALYST** ✨
+✨ **BOT SMART AI & TIKTOK BUFF** ✨
 
-📌 **HƯỚNG DẪN DÙNG BOT:**
 👉 `/like [link]` : Buff tim thủ công (Giãn cách 7s).
-👑 `/auto [link]` : Tự động buff liên tục sau mỗi 10 phút (Admin).
+👑 `/auto [link]` : Tự động buff liên tục mỗi 10 phút (Admin).
 👑 `/stop` : Dừng chế độ tự động buff (Admin).
-💬 **Chat tự do:** Nhắn tin bình thường, AI sẽ trò chuyện cùng bạn.
-📂 **Phân tích dữ liệu:** Gửi trực tiếp file văn bản/code để nhận báo cáo.
-⚠️ *Lưu ý: Tất cả tin nhắn thông báo của bot sẽ tự động hủy sau 10 phút để dọn dẹp nhóm.*
+💬 **Chat tự do:** AI ngắn gọn, tự nhớ kiến thức vĩnh viễn sẽ tiếp chuyện bạn.
+📂 **Gửi file văn bản/code:** Nhận phân tích và tóm tắt siêu tốc.
+*Tin nhắn hệ thống sẽ tự biến mất sau 10 phút.*
 """
     msg = bot.reply_to(message, text, parse_mode="Markdown")
     delay_delete(message.chat.id, msg.message_id)
@@ -206,35 +241,33 @@ def like(message):
         elapsed_time = current_time - user_cooldowns[user_id]
         if elapsed_time < COOLDOWN_TIME:
             remaining = round(COOLDOWN_TIME - elapsed_time, 1)
-            rep = bot.reply_to(message, f"⏳ [BUFF TIM] Vui lòng đợi {remaining} giây.")
+            rep = bot.reply_to(message, f"⏳ Vui lòng đợi {remaining} giây.")
             delay_delete(message.chat.id, rep.message_id, 5)
             return
 
     args = message.text.split(maxsplit=1)
     if len(args) < 2:
-        rep = bot.reply_to(message, "❌ Vui lòng nhập kèm link TikTok!")
-        delay_delete(message.chat.id, rep.message_id, 10)
+        rep = bot.reply_to(message, "❌ Vui lòng cung cấp link TikTok!")
+        delay_delete(message.chat.id, rep.message_id, 5)
         return
 
     url = args[1].strip()
     if "tiktok" not in url.lower():
-        rep = bot.reply_to(message, "❌ Link TikTok không hợp lệ!")
-        delay_delete(message.chat.id, rep.message_id, 10)
+        rep = bot.reply_to(message, "❌ Đường dẫn TikTok không hợp lệ!")
+        delay_delete(message.chat.id, rep.message_id, 5)
         return
 
-    loading = bot.reply_to(message, "⏳ Đang kết nối máy chủ API...")
+    loading = bot.reply_to(message, "⏳ Đang gửi yêu cầu đến server API...")
     user_cooldowns[user_id] = current_time  
 
     success, res_text = execute_buff_api(url)
     if success:
         bot.edit_message_text(res_text, chat_id=message.chat.id, message_id=loading.message_id, parse_mode="Markdown")
-        # ⏱️ Tự động xóa kết quả buff thành công sau 10 phút
         delay_delete(message.chat.id, loading.message_id)
     else:
-        if user_id in user_cooldowns:
-            del user_cooldowns[user_id]
+        if user_id in user_cooldowns: del user_cooldowns[user_id]
         bot.edit_message_text(f"❌ {res_text}", chat_id=message.chat.id, message_id=loading.message_id)
-        delay_delete(message.chat.id, loading.message_id, 20)
+        delay_delete(message.chat.id, loading.message_id, 15)
 
 
 @bot.message_handler(commands=['auto'])
@@ -244,25 +277,25 @@ def auto(message):
 
     user_id = message.from_user.id
     if auto_running.get(user_id, False):
-        rep = bot.reply_to(message, "⚠️ Tiến trình đang chạy rồi.")
-        delay_delete(message.chat.id, rep.message_id, 10)
+        rep = bot.reply_to(message, "⚠️ Chế độ tự động đang chạy.")
+        delay_delete(message.chat.id, rep.message_id, 5)
         return
 
     args = message.text.split(maxsplit=1)
     if len(args) < 2:
         rep = bot.reply_to(message, "❌ Vui lòng nhập kèm link TikTok!")
-        delay_delete(message.chat.id, rep.message_id, 10)
+        delay_delete(message.chat.id, rep.message_id, 5)
         return
 
     url = args[1].strip()
     if "tiktok" not in url.lower():
         rep = bot.reply_to(message, "❌ Link TikTok không hợp lệ!")
-        delay_delete(message.chat.id, rep.message_id, 10)
+        delay_delete(message.chat.id, rep.message_id, 5)
         return
 
     auto_running[user_id] = True
-    msg = bot.reply_to(message, f"🚀 **KÍCH HOẠT AUTO CHUYÊN NGHIỆP**\n🤖 Tự động chạy sau mỗi 10 phút.")
-    delay_delete(message.chat.id, msg.message_id, 30)
+    msg = bot.reply_to(message, f"🚀 **BẮT ĐẦU CHẠY AUTO** (Vòng lặp 10 phút/lần).")
+    delay_delete(message.chat.id, msg.message_id, 15)
 
     thread = Thread(target=auto_worker, args=(user_id, url, message.chat.id))
     thread.daemon = True
@@ -277,12 +310,15 @@ def stop(message):
     user_id = message.from_user.id
     if auto_running.get(user_id, False):
         auto_running[user_id] = False
-        rep = bot.reply_to(message, "🛑 Đã dừng chế độ Auto.")
+        rep = bot.reply_to(message, "🛑 Đã tắt chế độ Auto.")
     else:
-        rep = bot.reply_to(message, "ℹ️ Không có tiến trình nào đang chạy.")
-    delay_delete(message.chat.id, rep.message_id, 15)
+        rep = bot.reply_to(message, "ℹ️ Hiện không có tiến trình nào đang chạy.")
+    delay_delete(message.chat.id, rep.message_id, 10)
 
 
+# ========================================================
+# KÊNH TIẾP NHẬN CHAT TỰ DO TRONG NHÓM
+# ========================================================
 @bot.message_handler(func=lambda message: True)
 def reply_with_ai(message):
     if not is_allowed_chat(message): return
@@ -295,8 +331,8 @@ def reply_with_ai(message):
         elapsed_time = current_time - ai_cooldowns[user_id]
         if elapsed_time < AI_COOLDOWN_TIME:
             remaining = round(AI_COOLDOWN_TIME - elapsed_time, 1)
-            rep = bot.reply_to(message, f"⏳ [AI CHAT] Hãy cho tôi {remaining} giây để 'suy ngẫm' đã.")
-            delay_delete(message.chat.id, rep.message_id, 8)
+            rep = bot.reply_to(message, f"⏳ Chờ {remaining} giây.")
+            delay_delete(message.chat.id, rep.message_id, 4)
             return
 
     try: bot.send_chat_action(message.chat.id, 'typing')
@@ -305,8 +341,6 @@ def reply_with_ai(message):
     ai_cooldowns[user_id] = current_time  
     ai_response = ask_ai(message.text)
     ans = bot.reply_to(message, ai_response)
-    
-    # ⏱️ Tự động xóa câu trả lời chat tự do của AI sau 10 phút
     delay_delete(message.chat.id, ans.message_id)
 
 
@@ -315,12 +349,11 @@ def auto_worker(user_id, url, chat_id):
         if not auto_running.get(user_id, False): break
         success, res_text = execute_buff_api(url)
         if success:
-            msg = bot.send_message(chat_id, f"🔄 **[REPORT]**\n{res_text}", parse_mode="Markdown")
-            # ⏱️ Xóa báo cáo Auto sau 10 phút
+            msg = bot.send_message(chat_id, f"🔄 **[AUTO REPORT]**\n{res_text}", parse_mode="Markdown")
             delay_delete(chat_id, msg.message_id)
         else:
-            msg = bot.send_message(chat_id, f"⚠️ **[LỖI CHU KỲ]:** {res_text}")
-            delay_delete(chat_id, msg.message_id, 60)
+            msg = bot.send_message(chat_id, f"⚠️ **[AUTO LỖI]:** {res_text}")
+            delay_delete(chat_id, msg.message_id, 30)
             
         for _ in range(AUTO_DELAY):
             if not auto_running.get(user_id, False): return
@@ -331,40 +364,24 @@ def execute_buff_api(url):
     try:
         encoded = urllib.parse.quote(url)
         api = f"https://tiktokvm.vercel.app/api/likes?url={encoded}"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "application/json"
-        }
+        headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
         response = requests.get(api, headers=headers, timeout=25)
         current_vn_time = datetime.now(VN_TZ).strftime("%H:%M | %d/%m/%Y")
-
-        print(f"🤖 [API DEBUG] Code: {response.status_code} | Phản hồi: {response.text}")
 
         if response.status_code == 200:
             try:
                 data = response.json()
                 username = data.get("username") or data.get("user") or "TikTok User"
-                added = data.get("added") or data.get("count") or "Đang chạy ngầm..."
-            except Exception:
-                username = "Hệ thống tiếp nhận"
-                added = "Đang tăng"
+                added = data.get("added") or data.get("count") or "Đang tăng..."
+            except:
+                username = "Hệ thống"
+                added = "Đang chạy"
 
-            formatted_result = f"""
-🚀 **BUFF TYM THÀNH CÔNG**
-━━━━━━━━━━━━━━━━━━
-👤 **Tài khoản:** {username}
-➕ **Trạng thái:** +{added}
-🕒 **Thời gian:** {current_vn_time}
-"""
-            return True, formatted_result
-        elif response.status_code == 429:
-            return False, "API bị quá tải (Rate limit). Vui lòng thử lại sau."
-        else:
-            return False, f"Server API đang bận hoặc chặn yêu cầu (Mã lỗi: {response.status_code})"
-            
-    except Timeout: return False, "Kết nối đến server API bị quá hạn."
-    except RequestException: return False, "Lỗi mạng hoặc server API sập nguồn."
-    except: return False, "Hệ thống gặp sự cố không xác định."
+            return True, f"🚀 **BUFF TIM THÀNH CÔNG**\n👤 **User:** {username}\n➕ **Trạng thái:** +{added}\n🕒 {current_vn_time}"
+        return False, f"Server bận (Mã phản hồi {response.status_code})"
+    except Timeout: return False, "API quá hạn thời gian kết nối."
+    except RequestException: return False, "Lỗi kết nối mạng đến cổng API."
+    except: return False, "Lỗi hệ thống không xác định."
 
 
 bot.infinity_polling(timeout=60, long_polling_timeout=30, none_stop=True)
