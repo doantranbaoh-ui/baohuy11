@@ -181,7 +181,7 @@ def execute_buff_api(url):
     try:
         encoded = urllib.parse.quote(url)
         api = f"https://tiktokvm.vercel.app/api/likes?url={encoded}"
-        response = requests.get(api, timeout=25)
+        response = requests.get(api, timeout=36)
         current_vn_time = datetime.now(VN_TZ).strftime("%H:%M | %d/%m/%Y")
 
         if response.status_code == 200:
