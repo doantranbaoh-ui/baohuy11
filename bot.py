@@ -21,6 +21,9 @@ bot = telebot.TeleBot(TOKEN)
 VN_TZ = pytz.timezone('Asia/Ho_Chi_Minh')
 keep_alive()
 
+# Tạo Session ổn định luồng kết nối
+http_session = requests.Session()
+
 # ⏳ COOLDOWN & ĐỘ TRỄ
 user_cooldowns = {}        
 COOLDOWN_TIME = 7         
@@ -32,27 +35,29 @@ DELETE_DELAY = 300
 
 # 💾 QUẢN LÝ BỘ NHỚ RAM CHỐNG TRÀN
 MEMORY_FILE = "bot_memory.json"
-MAX_MEMORY_KEYS = 50      
-MAX_FILE_SIZE_KB = 500    
+MAX_MEMORY_KEYS = 15      
+MAX_FILE_SIZE_KB = 50    
 memory_lock = Lock()      
 
-# 🔑 XOAY VÒNG 3 API KEY AI (Sửa cấu hình model tối ưu nhất cho từng bên)
+# 🔑 XOAY VÒNG 3 API KEY AI (Đã sửa gpt-5.4 thành gpt-4o chuẩn hóa)
 AI_KEYS = [
-    {"key": "sk-d92be6f49626610cee386cf85897fe353cd5fadc44f66a73e98a0cce3efdfd8d", "url": "https://api.byesu.com/v1/chat/completions", "model": "gpt-5.4", "status": True},  
-    {"key": "sk-d1c9defa13eaa7386af8f711f38e9e8dd7a4754c9eebfe7f5642a391db82c2c3", "url": "https://api.byesu.com/v1/chat/completions", "model": "gpt-5.4", "status": True},
+    {"key": "sk-d92be6f49626610cee386cf85897fe353cd5fadc44f66a73e98a0cce3efdfd8d", "url": "https://api.byesu.com/v1/chat/completions", "model": "gpt-4o", "status": True},  
+    {"key": "sk-d1c9defa13eaa7386af8f711f38e9e8dd7a4754c9eebfe7f5642a391db82c2c3", "url": "https://api.byesu.com/v1/chat/completions", "model": "gpt-4o", "status": True},
     {"key": "fe_oa_7bd49f79bc22bda1bc0c9b89f37741aa0a3086e87cfba034", "url": "https://api.freemodel.dev/v1/chat/completions", "model": "gpt-4o", "status": True}  
 ]
 current_key_index = 0  
 
 # ========================================================
-# QUẢN LÝ DATABASE FILE JSON AN TOÀN
+# QUẢN LÝ DATABASE FILE JSON
 # ========================================================
 def load_memory():
     if os.path.exists(MEMORY_FILE):
         try:
             if (os.path.getsize(MEMORY_FILE) / 1024) > MAX_FILE_SIZE_KB: return []
-            with open(MEMORY_FILE, "r", encoding="utf-8") as f: return json.load(f)
-        except Exception: return []
+            with open(MEMORY_FILE, "r", encoding="utf-8") as f: 
+                return json.load(f)
+        except Exception: 
+            return []
     return []
 
 def save_memory(memory_data):
@@ -94,19 +99,17 @@ def is_admin(message):
 # 🧠 CƠ CHẾ DỰ PHÒNG KHẨN CẤP (FALLBACK BACKUP API)
 # ========================================================
 def backup_free_ai(messages):
-    """Hàm cứu trợ khẩn cấp khi cả 3 API chính đều sập - Sử dụng server public không cần key"""
     try:
-        url = "https://api.chatape.com/v1/chat/completions" # Endpoint dự phòng public
+        url = "https://api.chatape.com/v1/chat/completions" 
         payload = {"model": "gpt-3.5-turbo", "messages": messages, "temperature": 0.5}
-        res = requests.post(url, json=payload, timeout=15)
+        res = http_session.post(url, json=payload, timeout=12)
         if res.status_code == 200:
             return res.json()['choices'][0]['message']['content'].strip()
-    except Exception:
-        pass
-    return "⚠️ [BÁO CÁO]: Tất cả cổng kết nối AI hiện đang quá tải nghiêm trọng. Vui lòng thử lại sau ít phút!"
+    except Exception: pass
+    return "⚠️ [HỆ THỐNG]: Cổng kết nối AI hiện đang bảo trì diện rộng. Vui lòng thử lại sau ít phút!"
 
 # ========================================================
-# 🧠 CƠ CHẾ GỌI AI XOAY VÒNG THÔNG MINH (ĐÃ FIX)
+# 🧠 CƠ CHẾ GỌI AI XOAY VÒNG THÔNG MINH
 # ========================================================
 def ask_ai(new_user_prompt):
     global current_key_index, group_memory
@@ -118,7 +121,6 @@ def ask_ai(new_user_prompt):
         for mem in group_memory: messages.append(mem)
     messages.append({"role": "user", "content": new_user_prompt})
     
-    # Vòng lặp thử các Key chính
     for _ in range(len(AI_KEYS)):
         active_item = AI_KEYS[current_key_index]
         if not active_item["status"]:
@@ -126,9 +128,7 @@ def ask_ai(new_user_prompt):
             continue
             
         headers = {"Authorization": f"Bearer {active_item['key']}", "Content-Type": "application/json"}
-        
-        # Thử nghiệm tuần tự các model phổ biến nếu model chính bị nhà cấp phát từ chối (Lỗi 400/404)
-        models_to_try = [active_item["model"], "gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"]
+        models_to_try = [active_item["model"], "gpt-4o-mini", "gpt-3.5-turbo"]
         
         for current_model in models_to_try:
             payload = {
@@ -138,7 +138,7 @@ def ask_ai(new_user_prompt):
                 "temperature": 0.4
             }
             try:
-                response = requests.post(active_item["url"], json=payload, headers=headers, timeout=25) # Giảm timeout xuống 25s để nhảy key nhanh hơn
+                response = http_session.post(active_item["url"], json=payload, headers=headers, timeout=20)
                 if response.status_code == 200:
                     ai_reply = response.json()['choices'][0]['message']['content'].strip()
                     with memory_lock:
@@ -147,25 +147,14 @@ def ask_ai(new_user_prompt):
                     save_memory(group_memory) 
                     return ai_reply
                 
-                # Nếu lỗi sai model (400/404), tiếp tục thử model tiếp theo trong danh sách dự phòng của cùng key đó
-                if response.status_code in [400, 404]:
-                    continue
-                    
-                # Nếu lỗi xác thực hoặc hết lượt (401, 403, 429), hủy kích hoạt Key hiện tại và nhảy sang Key mới
-                if response.status_code in [401, 403, 429]:
-                    break
-            except Exception:
-                break # Bị timeout hoặc mất mạng đột ngột -> Chuyển sang đổi Key tiếp theo
+                if response.status_code in [400, 404]: continue
+                if response.status_code in [401, 403, 429]: break
+            except Exception: break
                 
-        # Đánh dấu lỗi Key hiện tại và chuyển chỉ mục sang Key kế tiếp
         AI_KEYS[current_key_index]["status"] = False
         current_key_index = (current_key_index + 1) % len(AI_KEYS)
             
-    # HÀNH ĐỘNG FIX TRIỆT ĐỂ: Nếu chạy hết vòng lặp 3 key vẫn lỗi -> Gọi API cứu trợ khẩn cấp
-    print("🚨 [HỆ THỐNG]: Cả 3 Key AI đều thất bại. Đang kích hoạt cổng cứu trợ dự phòng...")
     fallback_reply = backup_free_ai(messages)
-    
-    # Reset lại trạng thái các key chính để chuẩn bị cho các lượt chat sau
     for item in AI_KEYS: item["status"] = True
     return fallback_reply
 
@@ -324,7 +313,7 @@ def auto_worker(user_id, url, chat_id):
 def execute_buff_api(url):
     try:
         api = f"https://tiktokvm.vercel.app/api/likes?url={urllib.parse.quote(url)}"
-        response = requests.get(api, headers={"User-Agent": "Mozilla/5.0"}, timeout=20)
+        response = http_session.get(api, headers={"User-Agent": "Mozilla/5.0"}, timeout=20)
         vn_time = datetime.now(VN_TZ).strftime("%H:%M - %d/%m")
 
         if response.status_code == 200:
