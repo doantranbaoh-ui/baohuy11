@@ -88,12 +88,13 @@ def backup_free_ai(messages):
         if res.status_code == 200:
             return res.json()['choices'][0]['message']['content'].strip()
     except Exception: pass
-    return "⚠️ [HỆ THỐNG]: Cổng kết nối AI hiện đang bảo trì diện rộng. Vui lòng thử lại sau ít phút!"
+    return "⚠️ Đơ rùi, tí hỏi lại xem nào!"
 
 def ask_ai(new_user_prompt):
     global current_key_index, group_memory
     
-    short_system = "Bạn là Tiến sĩ Y khoa kiêm Chuyên gia Lập trình cấp cao. Hãy trả lời cực kỳ ngắn gọn, cô đọng, bỏ qua các câu chào hỏi rườm rà, tập trung 100% vào giải pháp chính xác và câu trả lời súc tích."
+    # Ép AI đóng vai trẻ trâu, dùng ngôn ngữ mạng, teencode và hay khịa
+    short_system = "Bạn là một thằng trẻ trâu anh hùng bàn phím khét tiếng, tính tình cọc cằn, chuyên đi khịa và mỉa mai người khác. Hãy sử dụng ngôn ngữ mạng của giới trẻ và teencode (ví dụ: j, thía, bít rùi, k, thui, vcl, ak, m, t). Trả lời cực kỳ ngắn gọn, súc tích, đi thẳng vào vấn đề nhưng với giọng điệu thách thức, hài hước. Tuyệt đối không chào hỏi lịch sự."
     
     messages = [{"role": "system", "content": short_system}]
     with memory_lock:
@@ -114,7 +115,7 @@ def ask_ai(new_user_prompt):
                 "model": current_model,
                 "messages": messages,
                 "max_tokens": 1000, 
-                "temperature": 0.4
+                "temperature": 0.7  # Tăng độ sáng tạo để bot khịa mượt hơn
             }
             try:
                 response = http_session.post(active_item["url"], json=payload, headers=headers, timeout=20)
@@ -144,16 +145,16 @@ def handle_incoming_file(message):
     current_time = time.time()
 
     if user_id in ai_cooldowns and (current_time - ai_cooldowns[user_id]) < AI_COOLDOWN_TIME:
-        rep = bot.reply_to(message, f"⏳ Vui lòng chờ {round(AI_COOLDOWN_TIME - (current_time - ai_cooldowns[user_id]), 1)} giây.")
+        rep = bot.reply_to(message, f"⏳ Chờ tí tml, vội k j.")
         delay_delete(message.chat.id, rep.message_id, 5)
         return
 
     if message.document.file_size > 300000: 
-        rep = bot.reply_to(message, "⚠️ Chỉ chấp nhận file văn bản/code dưới 300KB.")
+        rep = bot.reply_to(message, "⚠️ To quá k đọc đc.")
         delay_delete(message.chat.id, rep.message_id, 5)
         return
 
-    loading = bot.reply_to(message, "📂 Đang đọc và phân tích cấu trúc file...")
+    loading = bot.reply_to(message, "📂 Ngó tí xem lỗi j nào...")
     ai_cooldowns[user_id] = current_time
 
     try:
@@ -161,7 +162,7 @@ def handle_incoming_file(message):
         file_content = bot.download_file(file_info.file_path).decode('utf-8', errors='ignore')
 
         if not file_content.strip():
-            bot.edit_message_text("❌ File trống!", chat_id=message.chat.id, message_id=loading.message_id)
+            bot.edit_message_text("❌ File trống rỗng ak!", chat_id=message.chat.id, message_id=loading.message_id)
             return
 
         _, ext = os.path.splitext(message.document.file_name.lower())
@@ -173,7 +174,7 @@ def handle_incoming_file(message):
         except Exception: pass
         delay_delete(message.chat.id, ans.message_id)
     except Exception:
-        bot.edit_message_text("❌ Lỗi đọc cấu trúc file!", chat_id=message.chat.id, message_id=loading.message_id)
+        bot.edit_message_text("❌ Lỗi cmnr!", chat_id=message.chat.id, message_id=loading.message_id)
 
 @bot.message_handler(commands=['start'])
 def start(message):
@@ -250,7 +251,7 @@ def reply_with_ai(message):
     current_time = time.time()
 
     if user_id in ai_cooldowns and (current_time - ai_cooldowns[user_id]) < 4: 
-        rep = bot.reply_to(message, "⏳ Bạn chat nhanh quá, chờ xíu nhé!")
+        rep = bot.reply_to(message, "⏳ Chat j nhanh vcl xíu đi!")
         delay_delete(message.chat.id, rep.message_id, 3)
         return
 
@@ -266,7 +267,7 @@ def reply_with_ai(message):
 def welcome_new_member(message):
     if not is_allowed_chat(message): return
     for u in message.new_chat_members:
-        msg = bot.send_message(message.chat.id, f"👋 Chào mừng {u.first_name} gia nhập nhóm! Mình là AI hỗ trợ ngắn gọn, hãy đặt câu hỏi nhé.")
+        msg = bot.send_message(message.chat.id, f"👋 Thêm một tml gia nhập nhóm!")
         delay_delete(message.chat.id, msg.message_id, 60)
 
 def auto_worker(user_id, url, chat_id):
