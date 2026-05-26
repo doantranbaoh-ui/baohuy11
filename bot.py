@@ -40,7 +40,7 @@ DELETE_DELAY = 300
 
 MEMORY_FILE = "bot_memory.json"
 MAX_MEMORY_KEYS = 15      
-MAX_FILE_SIZE_KB = 50    
+MAX_FILE_SIZE_KB = 500    
 memory_lock = Lock()      
 
 AI_KEYS = [
