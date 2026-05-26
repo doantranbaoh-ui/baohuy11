@@ -10,9 +10,6 @@ import os
 import json
 from keep_alive import keep_alive
 
-# ========================================================
-# CẤU HÌNH HỆ THỐNG & BẢO MẬT
-# ========================================================
 TOKEN = "8080338995:AAEXOZr1duwHWqmBBciXvmeHFHaiuOTvayE"
 ALLOWED_GROUP_ID = -1003872001041  
 ADMIN_ID = 5736655322              
@@ -21,10 +18,8 @@ bot = telebot.TeleBot(TOKEN)
 VN_TZ = pytz.timezone('Asia/Ho_Chi_Minh')
 keep_alive()
 
-# Tạo Session ổn định luồng kết nối
 http_session = requests.Session()
 
-# ⏳ COOLDOWN & ĐỘ TRỄ
 user_cooldowns = {}        
 COOLDOWN_TIME = 7         
 ai_cooldowns = {}         
@@ -33,13 +28,11 @@ auto_running = {}
 AUTO_DELAY = 600        
 DELETE_DELAY = 300        
 
-# 💾 QUẢN LÝ BỘ NHỚ RAM CHỐNG TRÀN
 MEMORY_FILE = "bot_memory.json"
 MAX_MEMORY_KEYS = 15      
 MAX_FILE_SIZE_KB = 50    
 memory_lock = Lock()      
 
-# 🔑 XOAY VÒNG 3 API KEY AI (Đã sửa gpt-5.4 thành gpt-4o chuẩn hóa)
 AI_KEYS = [
     {"key": "sk-d92be6f49626610cee386cf85897fe353cd5fadc44f66a73e98a0cce3efdfd8d", "url": "https://api.byesu.com/v1/chat/completions", "model": "gpt-4o", "status": True},  
     {"key": "sk-d1c9defa13eaa7386af8f711f38e9e8dd7a4754c9eebfe7f5642a391db82c2c3", "url": "https://api.byesu.com/v1/chat/completions", "model": "gpt-4o", "status": True},
@@ -47,17 +40,12 @@ AI_KEYS = [
 ]
 current_key_index = 0  
 
-# ========================================================
-# QUẢN LÝ DATABASE FILE JSON
-# ========================================================
 def load_memory():
     if os.path.exists(MEMORY_FILE):
         try:
             if (os.path.getsize(MEMORY_FILE) / 1024) > MAX_FILE_SIZE_KB: return []
-            with open(MEMORY_FILE, "r", encoding="utf-8") as f: 
-                return json.load(f)
-        except Exception: 
-            return []
+            with open(MEMORY_FILE, "r", encoding="utf-8") as f: return json.load(f)
+        except Exception: return []
     return []
 
 def save_memory(memory_data):
@@ -73,9 +61,6 @@ def save_memory(memory_data):
 
 group_memory = load_memory()
 
-# ========================================================
-# HÀM BỔ TRỢ & PHÂN QUYỀN
-# ========================================================
 def delay_delete(chat_id, message_id, delay_seconds=DELETE_DELAY):
     def delete_worker():
         time.sleep(delay_seconds)
@@ -95,9 +80,6 @@ def is_admin(message):
     except Exception: pass
     return False
 
-# ========================================================
-# 🧠 CƠ CHẾ DỰ PHÒNG KHẨN CẤP (FALLBACK BACKUP API)
-# ========================================================
 def backup_free_ai(messages):
     try:
         url = "https://api.chatape.com/v1/chat/completions" 
@@ -108,9 +90,6 @@ def backup_free_ai(messages):
     except Exception: pass
     return "⚠️ [HỆ THỐNG]: Cổng kết nối AI hiện đang bảo trì diện rộng. Vui lòng thử lại sau ít phút!"
 
-# ========================================================
-# 🧠 CƠ CHẾ GỌI AI XOAY VÒNG THÔNG MINH
-# ========================================================
 def ask_ai(new_user_prompt):
     global current_key_index, group_memory
     
@@ -158,9 +137,6 @@ def ask_ai(new_user_prompt):
     for item in AI_KEYS: item["status"] = True
     return fallback_reply
 
-# ========================================================
-# 📂 PHÂN TÍCH FILE & ĐOÁN LỖI CODE TỰ ĐỘNG
-# ========================================================
 @bot.message_handler(content_types=['document'])
 def handle_incoming_file(message):
     if not is_allowed_chat(message): return
@@ -199,9 +175,6 @@ def handle_incoming_file(message):
     except Exception:
         bot.edit_message_text("❌ Lỗi đọc cấu trúc file!", chat_id=message.chat.id, message_id=loading.message_id)
 
-# ========================================================
-# XỬ LÝ LỆNH HỆ THỐNG & BUFF TƯƠNG TÁC TIKTOK
-# ========================================================
 @bot.message_handler(commands=['start'])
 def start(message):
     if not is_allowed_chat(message): return
@@ -271,9 +244,6 @@ def stop(message):
         rep = bot.reply_to(message, "ℹ️ Không có tiến trình ngầm nào đang chạy.")
     delay_delete(message.chat.id, rep.message_id, 5)
 
-# ========================================================
-# KÊNH CHAT TỰ DO TRONG BOX NHÓM
-# ========================================================
 @bot.message_handler(func=lambda m: m.chat.id == ALLOWED_GROUP_ID and m.text and not m.text.startswith('/'))
 def reply_with_ai(message):
     user_id = message.from_user.id
