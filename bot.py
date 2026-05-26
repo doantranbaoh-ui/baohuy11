@@ -21,25 +21,26 @@ bot = telebot.TeleBot(TOKEN)
 VN_TZ = pytz.timezone('Asia/Ho_Chi_Minh')
 keep_alive()
 
-# ⏳ COOLDOWN & ĐỘ TRỄ (TỐI ƯU GỌN)
+# ⏳ COOLDOWN & ĐỘ TRỄ
 user_cooldowns = {}        
 COOLDOWN_TIME = 7         
 ai_cooldowns = {}         
-AI_COOLDOWN_TIME = 15     # Giảm xuống 15s để phản hồi nhanh
+AI_COOLDOWN_TIME = 15     
 auto_running = {}        
 AUTO_DELAY = 600        
-DELETE_DELAY = 300        # 5 phút tự động xóa tin rác
+DELETE_DELAY = 300        
 
 # 💾 QUẢN LÝ BỘ NHỚ RAM CHỐNG TRÀN
 MEMORY_FILE = "bot_memory.json"
-MAX_MEMORY_KEYS = 15      # Giữ hội thoại ngắn gọn (15 câu gần nhất)
-MAX_FILE_SIZE_KB = 50    
+MAX_MEMORY_KEYS = 50      
+MAX_FILE_SIZE_KB = 500    
 memory_lock = Lock()      
 
-# 🔑 XOAY VÒNG 2 API KEY AI
+# 🔑 XOAY VÒNG 3 API KEY AI (Sửa cấu hình model tối ưu nhất cho từng bên)
 AI_KEYS = [
-    {"key": "sk-d92be6f49626610cee386cf85897fe353cd5fadc44f66a73e98a0cce3efdfd8d", "status": True},  
-    {"key": "sk-d1c9defa13eaa7386af8f711f38e9e8dd7a4754c9eebfe7f5642a391db82c2c3", "status": True}   
+    {"key": "sk-d92be6f49626610cee386cf85897fe353cd5fadc44f66a73e98a0cce3efdfd8d", "url": "https://api.byesu.com/v1/chat/completions", "model": "gpt-5.4", "status": True},  
+    {"key": "sk-d1c9defa13eaa7386af8f711f38e9e8dd7a4754c9eebfe7f5642a391db82c2c3", "url": "https://api.byesu.com/v1/chat/completions", "model": "gpt-5.4", "status": True},
+    {"key": "fe_oa_7bd49f79bc22bda1bc0c9b89f37741aa0a3086e87cfba034", "url": "https://api.freemodel.dev/v1/chat/completions", "model": "gpt-4o", "status": True}  
 ]
 current_key_index = 0  
 
@@ -90,13 +91,26 @@ def is_admin(message):
     return False
 
 # ========================================================
-# 🧠 CƠ CHẾ GỌI AI TRẢ LỜI NGẮN GỌN, TRỌNG TÂM
+# 🧠 CƠ CHẾ DỰ PHÒNG KHẨN CẤP (FALLBACK BACKUP API)
+# ========================================================
+def backup_free_ai(messages):
+    """Hàm cứu trợ khẩn cấp khi cả 3 API chính đều sập - Sử dụng server public không cần key"""
+    try:
+        url = "https://api.chatape.com/v1/chat/completions" # Endpoint dự phòng public
+        payload = {"model": "gpt-3.5-turbo", "messages": messages, "temperature": 0.5}
+        res = requests.post(url, json=payload, timeout=15)
+        if res.status_code == 200:
+            return res.json()['choices'][0]['message']['content'].strip()
+    except Exception:
+        pass
+    return "⚠️ [BÁO CÁO]: Tất cả cổng kết nối AI hiện đang quá tải nghiêm trọng. Vui lòng thử lại sau ít phút!"
+
+# ========================================================
+# 🧠 CƠ CHẾ GỌI AI XOAY VÒNG THÔNG MINH (ĐÃ FIX)
 # ========================================================
 def ask_ai(new_user_prompt):
     global current_key_index, group_memory
-    api_url = "https://api.byesu.com/v1/chat/completions"
     
-    # Ép AI bắt buộc phải chat ngắn, súc tích, đi thẳng vào vấn đề
     short_system = "Bạn là Tiến sĩ Y khoa kiêm Chuyên gia Lập trình cấp cao. Hãy trả lời cực kỳ ngắn gọn, cô đọng, bỏ qua các câu chào hỏi rườm rà, tập trung 100% vào giải pháp chính xác và câu trả lời súc tích."
     
     messages = [{"role": "system", "content": short_system}]
@@ -104,6 +118,7 @@ def ask_ai(new_user_prompt):
         for mem in group_memory: messages.append(mem)
     messages.append({"role": "user", "content": new_user_prompt})
     
+    # Vòng lặp thử các Key chính
     for _ in range(len(AI_KEYS)):
         active_item = AI_KEYS[current_key_index]
         if not active_item["status"]:
@@ -111,29 +126,48 @@ def ask_ai(new_user_prompt):
             continue
             
         headers = {"Authorization": f"Bearer {active_item['key']}", "Content-Type": "application/json"}
-        payload = {
-            "model": "gpt-5.4",
-            "messages": messages,
-            "max_tokens": 1000, # Đủ cho code ngắn và câu trả lời súc tích
-            "temperature": 0.4
-        }
-        try:
-            response = requests.post(api_url, json=payload, headers=headers, timeout=45)
-            if response.status_code == 200:
-                ai_reply = response.json()['choices'][0]['message']['content'].strip()
-                with memory_lock:
-                    group_memory.append({"role": "user", "content": new_user_prompt})
-                    group_memory.append({"role": "assistant", "content": ai_reply})
-                save_memory(group_memory) 
-                return ai_reply
-            elif response.status_code in [401, 403, 429]:
-                AI_KEYS[current_key_index]["status"] = False
-                current_key_index = (current_key_index + 1) % len(AI_KEYS)
-        except Exception:
-            current_key_index = (current_key_index + 1) % len(AI_KEYS)
+        
+        # Thử nghiệm tuần tự các model phổ biến nếu model chính bị nhà cấp phát từ chối (Lỗi 400/404)
+        models_to_try = [active_item["model"], "gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"]
+        
+        for current_model in models_to_try:
+            payload = {
+                "model": current_model,
+                "messages": messages,
+                "max_tokens": 1000, 
+                "temperature": 0.4
+            }
+            try:
+                response = requests.post(active_item["url"], json=payload, headers=headers, timeout=25) # Giảm timeout xuống 25s để nhảy key nhanh hơn
+                if response.status_code == 200:
+                    ai_reply = response.json()['choices'][0]['message']['content'].strip()
+                    with memory_lock:
+                        group_memory.append({"role": "user", "content": new_user_prompt})
+                        group_memory.append({"role": "assistant", "content": ai_reply})
+                    save_memory(group_memory) 
+                    return ai_reply
+                
+                # Nếu lỗi sai model (400/404), tiếp tục thử model tiếp theo trong danh sách dự phòng của cùng key đó
+                if response.status_code in [400, 404]:
+                    continue
+                    
+                # Nếu lỗi xác thực hoặc hết lượt (401, 403, 429), hủy kích hoạt Key hiện tại và nhảy sang Key mới
+                if response.status_code in [401, 403, 429]:
+                    break
+            except Exception:
+                break # Bị timeout hoặc mất mạng đột ngột -> Chuyển sang đổi Key tiếp theo
+                
+        # Đánh dấu lỗi Key hiện tại và chuyển chỉ mục sang Key kế tiếp
+        AI_KEYS[current_key_index]["status"] = False
+        current_key_index = (current_key_index + 1) % len(AI_KEYS)
             
+    # HÀNH ĐỘNG FIX TRIỆT ĐỂ: Nếu chạy hết vòng lặp 3 key vẫn lỗi -> Gọi API cứu trợ khẩn cấp
+    print("🚨 [HỆ THỐNG]: Cả 3 Key AI đều thất bại. Đang kích hoạt cổng cứu trợ dự phòng...")
+    fallback_reply = backup_free_ai(messages)
+    
+    # Reset lại trạng thái các key chính để chuẩn bị cho các lượt chat sau
     for item in AI_KEYS: item["status"] = True
-    return "🤖 Hệ thống bận, vui lòng thử lại sau vài giây!"
+    return fallback_reply
 
 # ========================================================
 # 📂 PHÂN TÍCH FILE & ĐOÁN LỖI CODE TỰ ĐỘNG
@@ -149,7 +183,7 @@ def handle_incoming_file(message):
         delay_delete(message.chat.id, rep.message_id, 5)
         return
 
-    if message.document.file_size > 300000: # Giới hạn 300KB cho nhẹ nhóm
+    if message.document.file_size > 300000: 
         rep = bot.reply_to(message, "⚠️ Chỉ chấp nhận file văn bản/code dưới 300KB.")
         delay_delete(message.chat.id, rep.message_id, 5)
         return
@@ -256,7 +290,7 @@ def reply_with_ai(message):
     user_id = message.from_user.id
     current_time = time.time()
 
-    if user_id in ai_cooldowns and (current_time - ai_cooldowns[user_id]) < 4: # Giãn cách chat thường 4s
+    if user_id in ai_cooldowns and (current_time - ai_cooldowns[user_id]) < 4: 
         rep = bot.reply_to(message, "⏳ Bạn chat nhanh quá, chờ xíu nhé!")
         delay_delete(message.chat.id, rep.message_id, 3)
         return
@@ -306,5 +340,4 @@ def execute_buff_api(url):
     except RequestException: return False, "Mất kết nối mạng!"
     except Exception: return False, "Sự cố không xác định!"
 
-# Khởi động hệ thống polling vô hạn
 bot.infinity_polling(none_stop=True)
