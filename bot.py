@@ -32,14 +32,8 @@ MAX_USER_MEMORY = 4
 
 TELE_LINK_PATTERN = re.compile(r'(t\.me|telegram\.me|telegram\.org)\/[a-zA-Z0-9_]+|@[a-zA-Z0-9_]{5,}')
 
-PRE_ICONS_LIST = [
-    '<tg-emoji emoji-id="5431447214631033120">⭐️</tg-emoji>', 
-    '<tg-emoji emoji-id="5431609312157771741">✨</tg-emoji>', 
-    '<tg-emoji emoji-id="5217730999052504851">🔥</tg-emoji>', 
-    '<tg-emoji emoji-id="5445279603056581413">👑</tg-emoji>', 
-    '<tg-emoji emoji-id="5431940989396593421">⚡️</tg-emoji>', 
-    '<tg-emoji emoji-id="5467652701881744154">💎</tg-emoji>'  
-]
+# --- THAY ĐỔI: Sử dụng bộ mã hóa Unicode đặc biệt hiển thị chuẩn trên mọi acc ---
+PRE_ICONS_LIST = ["⚡️", "✨", "🔥", "👑", "💎", "🔮", "🎯", "🚀"]
 
 AI_KEYS = [
     {"key": "sk-d92be6f49626610cee386cf85897fe353cd5fadc44f66a73e98a0cce3efdfd8d", "url": "https://api.byesu.com/v1/chat/completions", "model": "gpt-4o", "status": True},  
@@ -126,7 +120,6 @@ def ask_ai(prompt, custom_sys=None, u_id=None):
                     res.encoding = 'utf-8'
                     reply = res.json()['choices'][0]['message']['content'].strip()
                     
-                    # Giới hạn tin nhắn siêu ngắn (Tối đa 5 từ)
                     words = reply.split()
                     if len(words) > 5:
                         reply = " ".join(words[:5]) + "..."
