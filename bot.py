@@ -15,7 +15,7 @@ bot = telebot.TeleBot(TOKEN, num_threads=10)
 VN_TZ = pytz.timezone('Asia/Ho_Chi_Minh')
 keep_alive()
 
-BOT_INFO = bot.get_me() # Lấy thông tin username của bot để bắt bài khi bị tag
+BOT_INFO = bot.get_me() 
 
 http_session = requests.Session()
 adapter = requests.adapters.HTTPAdapter(pool_connections=20, pool_maxsize=30)
@@ -30,6 +30,7 @@ memory_lock = Lock()
 AUTO_KHIA_INTERVAL = 1800  
 
 TELE_LINK_PATTERN = re.compile(r'(t\.me|telegram\.me|telegram\.org)\/[a-zA-Z0-9_]+|@[a-zA-Z0-9_]{5,}')
+SPAM_TEXT_PATTERN = re.compile(r'To use this bot,\s*you must join our channel', re.IGNORECASE)
 
 AI_KEYS = [
     {"key": "sk-d92be6f49626610cee386cf85897fe353cd5fadc44f66a73e98a0cce3efdfd8d", "url": "https://api.byesu.com/v1/chat/completions", "model": "gpt-4o", "status": True},  
@@ -77,10 +78,11 @@ def check_and_delete_tele_link(m):
     text_to_check = ""
     if m.text: text_to_check += m.text
     if m.caption: text_to_check += m.caption
-    if TELE_LINK_PATTERN.search(text_to_check):
+    
+    if TELE_LINK_PATTERN.search(text_to_check) or SPAM_TEXT_PATTERN.search(text_to_check):
         try:
             bot.delete_message(m.chat.id, m.message_id)
-            cay_msg = ask_ai("Chửi một câu cực gắt và khinh bỉ tml vừa định gửi link quảng cáo group tele khác vào nhóm này, đuổi thẳng cổ nó đi.")
+            cay_msg = ask_ai("Chửi một câu cực gắt khinh bỉ tml định quảng cáo bẩn.")
             delay_delete(m.chat.id, bot.send_message(m.chat.id, f"⚠️ {cay_msg}").message_id, 30)
         except: pass
         return True
@@ -91,11 +93,12 @@ def backup_free_ai(msgs):
         res = http_session.post("https://api.chatape.com/v1/chat/completions", json={"model": "gpt-3.5-turbo", "messages": msgs, "temperature": 0.5}, timeout=10)
         if res.status_code == 200: return res.json()['choices'][0]['message']['content'].strip()
     except: pass
-    return "Sập rồi tml, đừng hỏi nữa."
+    return "Sập rồi tml."
 
 def ask_ai(prompt, custom_sys=None):
     global current_key_index, group_memory
-    sys_prompt = custom_sys if custom_sys else "Bạn là một thằng anh hùng bàn phím vô học, cộc cằn, khinh người tột độ. Nhiệm vụ duy nhất là trả lời thật ngắn gọn nhưng câu nào cũng phải đốp chát, mỉa mai, móc mỉa sâu cay, cố tình gán mác đối phương là nghèo, ngu dốt, hoặc ảo tưởng để chọc cho họ điên tiết và cay cú. Sử dụng ngôn ngữ mạng, teencode nặng (j, thía, bít, k, thui, vcl, ak, m, t). ÉP BUỘC tự chèn các icon cực hãm (🤡, 😏, 😮‍💨, 🤔, 👀) thích hợp vào câu. Không chào hỏi, không giúp đỡ tử tế."
+    # Ép system prompt giới hạn dưới 10 từ nghiêm ngặt
+    sys_prompt = custom_sys if custom_sys else "Bạn là một thằng anh hùng bàn phím vô học, cộc cằn. BẮT BUỘC trả lời cực ngắn, dưới 10 từ. Sử dụng ngôn ngữ mạng, teencode nặng (j, thía, bít, k, vcl, ak, m, t) kèm icon hãm (🤡, 😏, 😮‍💨). Không chào hỏi."
     messages = [{"role": "system", "content": sys_prompt}] + group_memory + [{"role": "user", "content": prompt}]
     
     for _ in range(len(AI_KEYS)):
@@ -106,7 +109,7 @@ def ask_ai(prompt, custom_sys=None):
         headers = {"Authorization": f"Bearer {act['key']}", "Content-Type": "application/json"}
         for model in [act["model"], "gpt-4o-mini", "gpt-3.5-turbo"]:
             try:
-                res = http_session.post(act["url"], json={"model": model, "messages": messages, "max_tokens": 1000, "temperature": 0.9}, headers=headers, timeout=15)
+                res = http_session.post(act["url"], json={"model": model, "messages": messages, "max_tokens": 50, "temperature": 0.9}, headers=headers, timeout=15)
                 if res.status_code == 200:
                     res.encoding = 'utf-8'
                     reply = res.json()['choices'][0]['message']['content'].strip()
@@ -123,10 +126,10 @@ def ask_ai(prompt, custom_sys=None):
 
 def auto_khia_worker():
     khia_topics = [
-        "Chửi cái nhóm này toàn một lũ tàu ngầm vô dụng, không biết tương tác.",
-        "Mỉa mai trình độ code rác rưởi của mấy thằng trong này suốt ngày lỗi.",
-        "Sủa một câu vu vơ chê bai đám lười làm đòi có ăn, suốt ngày rình tool free.",
-        "Cà khịa việc tụi nó thức đêm cày mấy cái game rách nát để trốn tránh thực tại nghèo khó."
+        "Chửi cái nhóm này toàn một lũ tàu ngầm vô dụng.",
+        "Mỉa mai trình độ code rác rưởi suốt ngày lỗi.",
+        "Chê bai đám lười làm đòi có ăn, rình tool free.",
+        "Cà khịa việc tụi nó thức đêm cày game trốn thực tại."
     ]
     while True:
         time.sleep(AUTO_KHIA_INTERVAL)
@@ -144,32 +147,31 @@ def handle_incoming_file(m):
     
     uid, cur_time = m.from_user.id, time.time()
     if uid in ai_cooldowns and (cur_time - ai_cooldowns[uid]) < AI_COOLDOWN_TIME:
-        return delay_delete(m.chat.id, bot.reply_to(m, "Spam nhanh vcl, định ăn tươi nuốt sống t ak?").message_id, 5)
+        return delay_delete(m.chat.id, bot.reply_to(m, "Spam nhanh vcl ak?").message_id, 5)
     if m.document.file_size > 500000: 
-        return delay_delete(m.chat.id, bot.reply_to(m, "File rác to vcl ai thèm đọc?").message_id, 5)
+        return delay_delete(m.chat.id, bot.reply_to(m, "File to vcl ai đọc?").message_id, 5)
 
-    loading = bot.reply_to(m, "Ngó xem cái đống rác m gửi là cái j...")
+    loading = bot.reply_to(m, "Ngó tí...")
     ai_cooldowns[uid] = cur_time
     def process_file():
         try:
             content = bot.download_file(bot.get_file(m.document.file_id).file_path).decode('utf-8', errors='ignore')
-            if not content.strip(): return bot.edit_message_text("File trống rỗng đem đi lòe trẻ con ak?", m.chat.id, loading.message_id)
+            if not content.strip(): return bot.edit_message_text("File trống lòe ai?", m.chat.id, loading.message_id)
             _, ext = os.path.splitext(m.document.file_name.lower())
             
-            # CẢI TIẾN 3: Đưa thông tin cá nhân thằng gửi file vào để AI chửi đích danh
             user_name = m.from_user.first_name
-            res = ask_ai(f"Thằng rách tên '{user_name}' gửi file {ext} này. Phân tích tìm cái ngu logic của nó và trả về code đã sửa ngắn nhất để khịa nó:\n\n{content}")
+            res = ask_ai(f"Thằng rách tên '{user_name}' gửi file {ext} này. Trả về code đã sửa ngắn nhất để khịa nó:\n\n{content}")
             
             try: bot.delete_message(m.chat.id, loading.message_id)
             except: pass
-            delay_delete(m.chat.id, bot.reply_to(m, f"Sửa xong cái đống nát của tml `{user_name}` rồi đấy:\n\n{res}").message_id)
-        except: bot.edit_message_text("Code ngu quá làm bot lỗi luôn rồi.", m.chat.id, loading.message_id)
+            delay_delete(m.chat.id, bot.reply_to(m, f"Sửa xong rồi đấy tml `{user_name}`:\n\n{res}").message_id)
+        except: bot.edit_message_text("Code ngu làm lỗi bot rồi.", m.chat.id, loading.message_id)
     Thread(target=process_file, daemon=True).start()
 
 @bot.message_handler(commands=['start'])
 def start(m):
     if not is_allowed_chat(m): return
-    text = "Bố đời AI khởi chạy.\nChat trực tiếp để nghe chửi.\n/like [link] : Buff tim TikTok thủ công.\n/auto [link] : Tự động buff.\n/stop : Tắt auto."
+    text = "Khởi chạy.\n/like [link] : Buff tim.\n/auto [link] : Auto.\n/stop : Tắt."
     delay_delete(m.chat.id, bot.reply_to(m, text).message_id)
 
 @bot.message_handler(commands=['like'])
@@ -177,12 +179,12 @@ def like(m):
     if not is_allowed_chat(m): return
     uid, cur_time = m.from_user.id, time.time()
     if uid in user_cooldowns and (cur_time - user_cooldowns[uid]) < COOLDOWN_TIME:
-        return delay_delete(m.chat.id, bot.reply_to(m, "Bấm từ từ thôi rách nút tml.").message_id, 4)
+        return delay_delete(m.chat.id, bot.reply_to(m, "Bấm chậm thôi tml.").message_id, 4)
     args = m.text.split(maxsplit=1)
     if len(args) < 2 or "tiktok" not in args[1].lower():
-        return delay_delete(m.chat.id, bot.reply_to(m, "Ném cái link rác j thía?").message_id, 5)
+        return delay_delete(m.chat.id, bot.reply_to(m, "Link rác j đây?").message_id, 5)
 
-    loading = bot.reply_to(m, "Chờ tí đi súc vật...")
+    loading = bot.reply_to(m, "Chờ tí...")
     user_cooldowns[uid] = cur_time  
     def run_like():
         suc, res = execute_buff_api(args[1].strip())
@@ -193,27 +195,27 @@ def like(m):
 @bot.message_handler(commands=['auto'])
 def auto(m):
     if not is_allowed_chat(m) or not is_admin(m): 
-        try: bot.reply_to(m, "Tuổi j đòi ra lệnh cho bố m?")
+        try: bot.reply_to(m, "Tuổi j ra lệnh?")
         except: pass
         return
     uid = m.from_user.id
-    if auto_running.get(uid, False): return delay_delete(m.chat.id, bot.reply_to(m, "Chạy lù lù rồi bật lắm vcl.").message_id, 5)
+    if auto_running.get(uid, False): return delay_delete(m.chat.id, bot.reply_to(m, "Chạy rồi bật lắm vcl.").message_id, 5)
     args = m.text.split(maxsplit=1)
-    if len(args) < 2 or "tiktok" not in args[1].lower(): return delay_delete(m.chat.id, bot.reply_to(m, "Link sai kìa tml mù ak?").message_id, 5)
+    if len(args) < 2 or "tiktok" not in args[1].lower(): return delay_delete(m.chat.id, bot.reply_to(m, "Link sai kìa tml.").message_id, 5)
 
     auto_running[uid] = True
-    delay_delete(m.chat.id, bot.reply_to(m, "Đã bật Auto ngầm.").message_id, 10)
+    delay_delete(m.chat.id, bot.reply_to(m, "Đã bật Auto.").message_id, 10)
     Thread(target=auto_worker, args=(uid, args[1].strip(), m.chat.id), daemon=True).start()
 
 @bot.message_handler(commands=['stop'])
 def stop(m):
     if not is_allowed_chat(m) or not is_admin(m):
-        try: bot.reply_to(m, "Tuổi j đòi ra lệnh cho bố m?")
+        try: bot.reply_to(m, "Tuổi j ra lệnh?")
         except: pass
         return
     uid = m.from_user.id
     auto_running[uid] = False
-    delay_delete(m.chat.id, bot.reply_to(m, "Tắt rồi ngon tự đi mà làm." if auto_running.get(uid, False) else "Có cái mẹ j đang chạy đâu mà bấm?").message_id, 5)
+    delay_delete(m.chat.id, bot.reply_to(m, "Tắt rồi ngon tự làm đi." if auto_running.get(uid, False) else "Có cái mẹ j đang chạy đâu?").message_id, 5)
 
 @bot.message_handler(func=lambda m: m.chat.id == ALLOWED_GROUP_ID and m.text)
 def reply_with_ai(m):
@@ -222,30 +224,29 @@ def reply_with_ai(m):
     
     uid, cur_time = m.from_user.id, time.time()
     if uid in ai_cooldowns and (cur_time - ai_cooldowns[uid]) < 4: 
-        return delay_delete(m.chat.id, bot.reply_to(m, "Gõ phím nhanh vcl ăn cắp thời gian ak?").message_id, 3)
+        return delay_delete(m.chat.id, bot.reply_to(m, "Gõ nhanh vcl thế tml?").message_id, 3)
     
     try: bot.send_chat_action(m.chat.id, 'typing')
     except: pass
     ai_cooldowns[uid] = cur_time  
     
-    # CẢI TIẾN 3 & 4: Phát hiện bị tag, bị reply và lấy tên sỉ nhục đích danh
     user_name = m.from_user.first_name
     is_reply_to_bot = m.reply_to_message and m.reply_to_message.from_user.id == BOT_INFO.id
     is_tagged_bot = f"@{BOT_INFO.username}" in m.text
     
-    # Ép prompt hệ thống hung hãn hơn nếu tml đó dám động chạm trực tiếp đến bot
-    sys_prompt = "Bạn là một thằng anh hùng bàn phím vô học, cộc cằn, khinh người tột độ. Nhiệm vụ duy nhất là trả lời thật ngắn gọn nhưng câu nào cũng phải đốp chát, mỉa mai, móc mỉa sâu cay, cố tình gán mác đối phương là nghèo, ngu dốt, hoặc ảo tưởng để chọc cho họ điên tiết và cay cú. Sử dụng ngôn ngữ mạng, teencode nặng (j, thía, bít, k, thui, vcl, ak, m, t). ÉP BUỘC tự chèn các icon cực hãm (🤡, 😏, 😮‍💨, 🤔, 👀) thích hợp vào câu. Không chào hỏi, không giúp đỡ tử tế."
+    # Ép cấu trúc hệ thống giới hạn 10 từ gắt gao khi chửi trực diện
+    sys_prompt = "Bạn là một thằng anh hùng bàn phím vô học, cộc cằn. BẮT BUỘC trả lời cực ngắn, dưới 10 từ. Sử dụng ngôn ngữ mạng, teencode nặng (j, thía, bít, k, vcl, ak, m, t) kèm icon hãm (🤡, 😏, 😮‍💨). Không chào hỏi."
     if is_reply_to_bot or is_tagged_bot:
-        sys_prompt = "Bạn đang bị một tml rách rưới tag tên hoặc reply tin nhắn để đôi co thách thức. Hãy nổi điên lên, chửi bới thật đốp chát, vô học, bố đời, mỉa mai tột cùng vào thẳng mặt nó để nó câm mõm. Trả lời cực ngắn, gọn, hãm tài. Tự động thêm teencode nặng và icon khinh bỉ (🤡, 😏, 😮‍💨)."
+        sys_prompt = "Bạn đang bị một tml rách tag hoặc reply đôi co. Hãy nổi điên lên chửi thẳng mặt nó. ÉP BUỘC trả lời dưới 10 từ, ngắn gọn, teencode nặng, cực hãm tài (🤡, 😏)."
 
-    prompt_content = f"Thằng rách tên '{user_name}' vừa sủa câu này trong nhóm: {m.text}. Hãy phản hồi đốp chát trực diện vào nó."
+    prompt_content = f"Thằng rách tên '{user_name}' vừa sủa câu này: {m.text}. Hãy phản hồi đốp chát trực diện nó."
 
     Thread(target=lambda: delay_delete(m.chat.id, bot.reply_to(m, ask_ai(prompt_content, custom_sys=sys_prompt)).message_id), daemon=True).start()
 
 @bot.message_handler(content_types=['new_chat_members'])
 def welcome_new_member(m):
     if is_allowed_chat(m):
-        for u in m.new_chat_members: delay_delete(m.chat.id, bot.send_message(m.chat.id, f"Lại thêm một tml ngu ngơ tên `{u.first_name}` vào bầy.").message_id, 60)
+        for u in m.new_chat_members: delay_delete(m.chat.id, bot.send_message(m.chat.id, f"Lại thêm một tml ngu tên `{u.first_name}` vào.").message_id, 60)
 
 def auto_worker(uid, url, chat_id):
     while auto_running.get(uid, False):
@@ -269,11 +270,11 @@ def execute_buff_api(url):
                 status_info = d.get('added') or d.get('count') or d.get('msg') or 'Đang xử lý'
                 return True, f"Buff xong\nUser: {user_info}\nStatus: {status_info}\nTime: {t}"
             except: 
-                return True, f"Buff xong\nUser: Hệ thống\nStatus: Đang chạy dữ liệu\nTime: {t}"
+                return True, f"Buff xong\nUser: Hệ thống\nStatus: Đang chạy\nTime: {t}"
         return False, f"Server oẳng rùi (Mã {res.status_code})"
-    except Timeout: return False, "Nghẽn mạng rồi chờ mút chỉ đi."
-    except RequestException: return False, "Mất kết nối server rách."
-    except: return False, "Lỗi méo bít nữa."
+    except Timeout: return False, "Nghẽn mạng rồi chờ đi."
+    except RequestException: return False, "Mất kết nối server."
+    except: return False, "Lỗi rồi."
 
 if __name__ == "__main__":
     print("Bot khởi chạy...")
