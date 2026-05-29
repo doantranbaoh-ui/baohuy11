@@ -116,9 +116,10 @@ def ask_ai(prompt, custom_sys=None, u_id=None):
                     res.encoding = 'utf-8'
                     reply = res.json()['choices'][0]['message']['content'].strip()
                     
+                    # Hard Cut-off và tự động chèn đuôi Premium nếu AI quên xài icon pre
                     words = reply.split()
                     if len(words) > 10:
-                        reply = " ".join(words[:9]) + "... 🤡"
+                        reply = " ".join(words[:9]) + "... ⭐️✨"
                     
                     if u_id:
                         u_mem.append({"role": "user", "content": prompt})
@@ -148,7 +149,9 @@ def auto_khia_worker():
         time.sleep(AUTO_KHIA_INTERVAL)
         try:
             topic = random.choice(khia_topics)
-            sys_p = "Bạn là một thằng anh hùng bàn phím vô học. BẮT BUỘC trả lời cực ngắn dưới 10 từ. Sử dụng ngôn ngữ mạng teencode nặng (j, thía, bít, k, vcl) kèm icon hãm (🤡, 😏)."
+            # Cấu hình icon Premium cho luồng khịa tự động
+            pre_icons = random.choice(["⭐️✨", "⭐🔥", "⭐️👑", "⭐💥", "⭐️⚡"])
+            sys_p = f"Bạn là một thằng anh hùng bàn phím vô học. BẮT BUỘC trả lời cực ngắn dưới 10 từ. Sử dụng ngôn ngữ teencode nặng. KHÔNG DÙNG icon thường, BẮT BUỘC kết thúc câu bằng các icon Premium này: {pre_icons}."
             msg_khia = ask_ai(topic, custom_sys=sys_p)
             if "Sập rồi" not in msg_khia:
                 delay_delete(ALLOWED_GROUP_ID, bot.send_message(ALLOWED_GROUP_ID, msg_khia).message_id)
@@ -174,7 +177,8 @@ def handle_incoming_file(m):
             _, ext = os.path.splitext(m.document.file_name.lower())
             
             user_name = m.from_user.first_name
-            sys_p = "Bạn là thằng cộc cằn, bắt lỗi code rác. BẮT BUỘC chửi cực ngắn gọn dưới 10 từ."
+            pre_icons = random.choice(["⭐️✨", "⭐🔥", "⭐️👑", "⭐💥"])
+            sys_p = f"Bạn là thằng cộc cằn, bắt lỗi code rác. BẮT BUỘC chửi cực ngắn gọn dưới 10 từ. KHÔNG DÙNG icon thường, kết thúc bằng icon Premium: {pre_icons}"
             res = ask_ai(f"Thằng rách tên '{user_name}' gửi file {ext} này. Trả về câu khịa ngắn gọn chê bai logic của nó:\n\n{content}", custom_sys=sys_p, u_id=uid)
             
             try: bot.delete_message(m.chat.id, loading.message_id)
@@ -253,22 +257,22 @@ def reply_with_ai(m):
     is_reply_to_bot = m.reply_to_message and m.reply_to_message.from_user.id == BOT_INFO.id
     is_tagged_bot = f"@{BOT_INFO.username}" in m.text
     
-    # ÉP AI xài icon ngôi sao của Premium (⭐ hoặc ⭐️) để khịa trực diện bọn Premium ảo tưởng
+    # --- RANDOM CÁC CỤM ICON PREMIUM CHẤT LƯỢNG ---
+    selected_pre_icons = random.choice(["⭐️✨", "⭐🔥", "⭐️👑", "⭐💥", "⭐️⚡", "⭐💎"])
+
+    # ÉP AI CHỈ ĐƯỢC XÀI ICON PREMIUM, CẤM TUYỆT ĐỐI ICON THƯỜNG
     if is_premium:
-        sys_prompt = "Bạn là anh hùng bàn phím ghét tụi nhà giàu ảo tưởng. BẮT BUỘC trả lời cực ngắn dưới 10 từ. Sử dụng ngôn ngữ mạng teencode nặng. BẮT BUỘC chèn icon Premium là ngôi sao (⭐️, ⭐) kèm icon hãm (🤡, 😏) vào câu để mỉa mai nó có Premium thì oai ak."
+        sys_prompt = f"Bạn là anh hùng bàn phím chuyên ghét tụi nhà giàu ảo tưởng. BẮT BUỘC trả lời cực ngắn dưới 10 từ bằng ngôn ngữ mạng teencode nặng. NGHIÊM CẤM dùng các icon mặt cười bình thường (như 🤡, 😏, 😂, 🤣). BẮT BUỘC chèn cụm icon Telegram Premium này vào giữa hoặc cuối câu để sỉ nhục nó: {selected_pre_icons}"
     else:
         personas = [
-            "Bạn là anh hùng bàn phím trẻ trâu. BẮT BUỘC trả lời cực ngắn dưới 10 từ. Xài teencode nặng (j, thía, bít, k, vcl, ak, m, t), chèn icon hãm (🤡, 😏, 😮‍💨). Không chào hỏi.",
-            "Bạn là giáo sư triết học toxic. Chuyên dùng từ ngữ cao siêu, thâm sâu để mỉa mai sự ngu dốt của đối phương. BẮT BUỘC dưới 10 từ, cực khinh bỉ.",
-            "Bạn là tml cụt lủn, bất cần đời. Chỉ rep cực ngắn tầm 3-5 từ để thể hiện sự khinh rẻ tột cùng, chê đối phương phiền phức (Ví dụ: Kệ m chứ 🤡, Liên quan j t 😏)."
+            f"Bạn là anh hùng bàn phím trẻ trâu. BẮT BUỘC trả lời cực ngắn dưới 10 từ. Xài teencode nặng (j, thía, bít, k, vcl, ak, m, t). CẤM dùng icon mặt cười thường, CHỈ ĐƯỢC DÙNG icon Premium này: {selected_pre_icons}",
+            f"Bạn là giáo sư triết học toxic. Chuyên dùng từ ngữ cao siêu mỉa mai đối phương. BẮT BUỘC dưới 10 từ. CẤM dùng icon thường, CHỈ ĐƯỢC dùng cụm icon Premium sau ở cuối câu: {selected_pre_icons}",
+            f"Bạn là tml cụt lủn, bất cần đời. Chỉ rep cực ngắn tầm 3-5 từ để thể hiện sự khinh rẻ. KHÔNG DÙNG icon thường, CHỈ DÙNG đúng cụm icon Premium này: {selected_pre_icons}"
         ]
         sys_prompt = random.choice(personas)
     
     if is_reply_to_bot or is_tagged_bot:
-        if is_premium:
-            sys_prompt = "Bạn bị một tml Premium tag/reply đôi co thách thức. Hãy nổi điên lên chửi thẳng mặt nó cực kỳ vô học và bố đời. BẮT BUỘC rep dưới 10 từ, chèn icon ngôi sao Premium (⭐️) và (🤡, 😏) để sỉ nhục nó."
-        else:
-            sys_prompt = "Bạn bị đối phương tag tên/reply đôi co thách thức. Hãy nổi điên lên chửi thẳng mặt nó cực kỳ vô học và bố đời. BẮT BUỘC rep dưới 10 từ, siêu hãm tài (🤡, 😏)."
+        sys_prompt = f"Bạn bị đối phương tag/reply đôi co thách thức. Hãy nổi điên lên chửi thẳng mặt cực kỳ vô học và bố đời. BẮT BUỘC rep dưới 10 từ. CẤM dùng icon mặt cười thường, BẮT BUỘC dùng cụm icon Premium hãm tài này ở cuối câu: {selected_pre_icons}"
 
     prompt_content = f"Đối tượng chat tên '{user_name}', đặc điểm: {has_username}, {is_premium_text}. Nó vừa sủa câu này: {m.text}. Hãy phản hồi đốp chát thẳng vào mõm nó."
 
