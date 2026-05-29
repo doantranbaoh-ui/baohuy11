@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-import sys, io, time, urllib.parse, os, json, requests, telebot, pytz, random, re
+import sys, io, time, urllib.parse, os, json, requests, telebot, pytz, random, re, html
 from threading import Thread, Lock
 from requests.exceptions import RequestException, Timeout
 from datetime import datetime
@@ -34,6 +34,16 @@ AUTO_KHIA_INTERVAL = 1800
 
 TELE_LINK_PATTERN = re.compile(r'(t\.me|telegram\.me|telegram\.org)\/[a-zA-Z0-9_]+|@[a-zA-Z0-9_]{5,}')
 
+# --- HỆ THỐNG CUSTOM EMOJI PREMIUM ĐỘNG HOÀN CHỈNH ---
+PRE_ICONS_LIST = [
+    '<tg-emoji emoji-id="5431447214631033120">⭐️</tg-emoji>', 
+    '<tg-emoji emoji-id="5431609312157771741">✨</tg-emoji>', 
+    '<tg-emoji emoji-id="5217730999052504851">🔥</tg-emoji>', 
+    '<tg-emoji emoji-id="5445279603056581413">👑</tg-emoji>', 
+    '<tg-emoji emoji-id="5431940989396593421">⚡️</tg-emoji>', 
+    '<tg-emoji emoji-id="5467652701881744154">💎</tg-emoji>'  
+]
+
 AI_KEYS = [
     {"key": "sk-d92be6f49626610cee386cf85897fe353cd5fadc44f66a73e98a0cce3efdfd8d", "url": "https://api.byesu.com/v1/chat/completions", "model": "gpt-4o", "status": True},  
     {"key": "sk-d1c9defa13eaa7386af8f711f38e9e8dd7a4754c9eebfe7f5642a391db82c2c3", "url": "https://api.byesu.com/v1/chat/completions", "model": "gpt-4o", "status": True},
@@ -67,25 +77,23 @@ def delay_delete(chat_id, message_id, delay=DELETE_DELAY):
 
 def is_allowed_chat(m):
     if m.chat.id == ALLOWED_GROUP_ID: return True
-    try: bot.reply_to(m, "Xài lậu ak tml rách?")
+    try: bot.reply_to(m, "Xài lậu ak tml rách?", parse_mode="HTML")
     except: pass
     return False
 
 def is_admin(m):
-    if m.from_user.id == ADMIN_ID: return True
-    return False
+    return m.from_user.id == ADMIN_ID
 
 def check_and_delete_tele_link(m):
     if is_admin(m): return False
-    text_to_check = ""
-    if m.text: text_to_check += m.text
-    if m.caption: text_to_check += m.caption
+    text_to_check = (m.text or "") + (m.caption or "")
     
     if TELE_LINK_PATTERN.search(text_to_check):
         try:
             bot.delete_message(m.chat.id, m.message_id)
             cay_msg = ask_ai("Chửi một câu cực gắt khinh bỉ tml định quảng cáo bẩn.", u_id=m.from_user.id)
-            delay_delete(m.chat.id, bot.send_message(m.chat.id, f"⚠️ {cay_msg}").message_id, 30)
+            icon = random.choice(PRE_ICONS_LIST)
+            delay_delete(m.chat.id, bot.send_message(m.chat.id, f"⚠️ {html.escape(cay_msg)} {icon}", parse_mode="HTML").message_id, 30)
         except: pass
         return True
     return False
@@ -93,7 +101,8 @@ def check_and_delete_tele_link(m):
 def backup_free_ai(msgs):
     try:
         res = http_session.post("https://api.chatape.com/v1/chat/completions", json={"model": "gpt-3.5-turbo", "messages": msgs, "temperature": 0.5}, timeout=10)
-        if res.status_code == 200: return res.json()['choices'][0]['message']['content'].strip()
+        if res.status_code == 200: 
+            return res.json()['choices'][0]['message']['content'].strip()
     except: pass
     return "Sập rồi tml."
 
@@ -103,23 +112,27 @@ def ask_ai(prompt, custom_sys=None, u_id=None):
     u_mem = user_memories.get(u_id, []) if u_id else group_memory
     messages = [{"role": "system", "content": custom_sys}] + u_mem + [{"role": "user", "content": prompt}]
     
+    if not any(k["status"] for k in AI_KEYS):
+        for item in AI_KEYS: item["status"] = True
+
     for _ in range(len(AI_KEYS)):
         act = AI_KEYS[current_key_index]
         if not act["status"]:
             current_key_index = (current_key_index + 1) % len(AI_KEYS)
             continue
+            
         headers = {"Authorization": f"Bearer {act['key']}", "Content-Type": "application/json"}
         for model in [act["model"], "gpt-4o-mini", "gpt-3.5-turbo"]:
             try:
-                res = http_session.post(act["url"], json={"model": model, "messages": messages, "max_tokens": 30, "temperature": 0.9}, headers=headers, timeout=15)
+                res = http_session.post(act["url"], json={"model": model, "messages": messages, "max_tokens": 40, "temperature": 0.9}, headers=headers, timeout=12)
                 if res.status_code == 200:
                     res.encoding = 'utf-8'
                     reply = res.json()['choices'][0]['message']['content'].strip()
                     
-                    # Hard Cut-off và tự động chèn đuôi Premium nếu AI quên xài icon pre
+                    # Nghiêm ngặt giới hạn dưới 10 từ
                     words = reply.split()
                     if len(words) > 10:
-                        reply = " ".join(words[:9]) + "... ⭐️✨"
+                        reply = " ".join(words[:9]) + "..."
                     
                     if u_id:
                         u_mem.append({"role": "user", "content": prompt})
@@ -127,15 +140,16 @@ def ask_ai(prompt, custom_sys=None, u_id=None):
                         user_memories[u_id] = u_mem[-MAX_USER_MEMORY:]
                     else:
                         save_memory(messages[1:] + [{"role": "assistant", "content": reply}])
-                        
+                    
                     return reply
                 if res.status_code in [400, 404]: continue
                 if res.status_code in [401, 403, 429]: break
-            except: break
+            except: 
+                break
+                
         AI_KEYS[current_key_index]["status"] = False
         current_key_index = (current_key_index + 1) % len(AI_KEYS)
             
-    for item in AI_KEYS: item["status"] = True
     return backup_free_ai(messages)
 
 def auto_khia_worker():
@@ -149,12 +163,11 @@ def auto_khia_worker():
         time.sleep(AUTO_KHIA_INTERVAL)
         try:
             topic = random.choice(khia_topics)
-            # Cấu hình icon Premium cho luồng khịa tự động
-            pre_icons = random.choice(["⭐️✨", "⭐🔥", "⭐️👑", "⭐💥", "⭐️⚡"])
-            sys_p = f"Bạn là một thằng anh hùng bàn phím vô học. BẮT BUỘC trả lời cực ngắn dưới 10 từ. Sử dụng ngôn ngữ teencode nặng. KHÔNG DÙNG icon thường, BẮT BUỘC kết thúc câu bằng các icon Premium này: {pre_icons}."
+            sys_p = "Bạn là một thằng anh hùng bàn phím vô học. BẮT BUỘC trả lời cực ngắn dưới 10 từ bằng ngôn ngữ teencode nặng. CẤM dùng bất kỳ biểu tượng cảm xúc nào."
             msg_khia = ask_ai(topic, custom_sys=sys_p)
             if "Sập rồi" not in msg_khia:
-                delay_delete(ALLOWED_GROUP_ID, bot.send_message(ALLOWED_GROUP_ID, msg_khia).message_id)
+                icon_pre = "".join(random.sample(PRE_ICONS_LIST, 2))
+                bot.send_message(ALLOWED_GROUP_ID, f"{html.escape(msg_khia)} {icon_pre}", parse_mode="HTML")
         except: pass
 
 @bot.message_handler(content_types=['document'])
@@ -164,77 +177,77 @@ def handle_incoming_file(m):
     
     uid, cur_time = m.from_user.id, time.time()
     if uid in ai_cooldowns and (cur_time - ai_cooldowns[uid]) < AI_COOLDOWN_TIME:
-        return delay_delete(m.chat.id, bot.reply_to(m, "Spam nhanh vcl ak?").message_id, 5)
+        return delay_delete(m.chat.id, bot.reply_to(m, "Spam nhanh vcl ak?", parse_mode="HTML").message_id, 5)
     if m.document.file_size > 500000: 
-        return delay_delete(m.chat.id, bot.reply_to(m, "File to vcl ai đọc?").message_id, 5)
+        return delay_delete(m.chat.id, bot.reply_to(m, "File to vcl ai đọc?", parse_mode="HTML").message_id, 5)
 
-    loading = bot.reply_to(m, "Ngó tí...")
+    loading = bot.reply_to(m, "Ngó tí...", parse_mode="HTML")
     ai_cooldowns[uid] = cur_time
     def process_file():
         try:
             content = bot.download_file(bot.get_file(m.document.file_id).file_path).decode('utf-8', errors='ignore')
-            if not content.strip(): return bot.edit_message_text("File trống lòe ai?", m.chat.id, loading.message_id)
+            if not content.strip(): return bot.edit_message_text("File trống lòe ai?", m.chat.id, loading.message_id, parse_mode="HTML")
             _, ext = os.path.splitext(m.document.file_name.lower())
             
             user_name = m.from_user.first_name
-            pre_icons = random.choice(["⭐️✨", "⭐🔥", "⭐️👑", "⭐💥"])
-            sys_p = f"Bạn là thằng cộc cằn, bắt lỗi code rác. BẮT BUỘC chửi cực ngắn gọn dưới 10 từ. KHÔNG DÙNG icon thường, kết thúc bằng icon Premium: {pre_icons}"
+            sys_p = "Bạn là thằng cộc cằn, bắt lỗi code rác. BẮT BUỘC chửi cực ngắn gọn dưới 10 từ. CẤM tự dùng icon."
             res = ask_ai(f"Thằng rách tên '{user_name}' gửi file {ext} này. Trả về câu khịa ngắn gọn chê bai logic của nó:\n\n{content}", custom_sys=sys_p, u_id=uid)
             
             try: bot.delete_message(m.chat.id, loading.message_id)
             except: pass
-            delay_delete(m.chat.id, bot.reply_to(m, f"Sửa xong rồi đấy tml `{user_name}`:\n\n{res}").message_id)
-        except: bot.edit_message_text("Code ngu làm lỗi bot rồi.", m.chat.id, loading.message_id)
+            icon_pre = "".join(random.sample(PRE_ICONS_LIST, 2))
+            delay_delete(m.chat.id, bot.reply_to(m, f"Sửa xong rồi đấy tml <b>{html.escape(user_name)}</b>:\n\n{html.escape(res)} {icon_pre}", parse_mode="HTML").message_id)
+        except: bot.edit_message_text("Code ngu làm lỗi bot rồi.", m.chat.id, loading.message_id, parse_mode="HTML")
     Thread(target=process_file, daemon=True).start()
 
 @bot.message_handler(commands=['start'])
 def start(m):
     if not is_allowed_chat(m): return
     text = "Khởi chạy.\n/like [link] : Buff tim.\n/auto [link] : Auto.\n/stop : Tắt."
-    delay_delete(m.chat.id, bot.reply_to(m, text).message_id)
+    delay_delete(m.chat.id, bot.reply_to(m, text, parse_mode="HTML").message_id)
 
 @bot.message_handler(commands=['like'])
 def like(m):
     if not is_allowed_chat(m): return
     uid, cur_time = m.from_user.id, time.time()
     if uid in user_cooldowns and (cur_time - user_cooldowns[uid]) < COOLDOWN_TIME:
-        return delay_delete(m.chat.id, bot.reply_to(m, "Bấm chậm thôi tml.").message_id, 4)
+        return delay_delete(m.chat.id, bot.reply_to(m, "Bấm chậm thôi tml.", parse_mode="HTML").message_id, 4)
     args = m.text.split(maxsplit=1)
     if len(args) < 2 or "tiktok" not in args[1].lower():
-        return delay_delete(m.chat.id, bot.reply_to(m, "Link rác j đây?").message_id, 5)
+        return delay_delete(m.chat.id, bot.reply_to(m, "Link rác j đây?", parse_mode="HTML").message_id, 5)
 
-    loading = bot.reply_to(m, "Chờ tí...")
+    loading = bot.reply_to(m, "Chờ tí...", parse_mode="HTML")
     user_cooldowns[uid] = cur_time  
     def run_like():
         suc, res = execute_buff_api(args[1].strip())
-        bot.edit_message_text(res, m.chat.id, loading.message_id, parse_mode="Markdown" if suc else None)
+        bot.edit_message_text(res, m.chat.id, loading.message_id, parse_mode="HTML")
         delay_delete(m.chat.id, loading.message_id, 30 if suc else 10)
     Thread(target=run_like, daemon=True).start()
 
 @bot.message_handler(commands=['auto'])
 def auto(m):
     if not is_allowed_chat(m) or not is_admin(m): 
-        try: bot.reply_to(m, "Tuổi j ra lệnh?")
+        try: bot.reply_to(m, "Tuổi j ra lệnh?", parse_mode="HTML")
         except: pass
         return
     uid = m.from_user.id
-    if auto_running.get(uid, False): return delay_delete(m.chat.id, bot.reply_to(m, "Chạy rồi bật lắm vcl.").message_id, 5)
+    if auto_running.get(uid, False): return delay_delete(m.chat.id, bot.reply_to(m, "Chạy rồi bật lắm vcl.", parse_mode="HTML").message_id, 5)
     args = m.text.split(maxsplit=1)
-    if len(args) < 2 or "tiktok" not in args[1].lower(): return delay_delete(m.chat.id, bot.reply_to(m, "Link sai kìa tml.").message_id, 5)
+    if len(args) < 2 or "tiktok" not in args[1].lower(): return delay_delete(m.chat.id, bot.reply_to(m, "Link sai kìa tml.", parse_mode="HTML").message_id, 5)
 
     auto_running[uid] = True
-    delay_delete(m.chat.id, bot.reply_to(m, "Đã bật Auto.").message_id, 10)
+    delay_delete(m.chat.id, bot.reply_to(m, "Đã bật Auto.", parse_mode="HTML").message_id, 10)
     Thread(target=auto_worker, args=(uid, args[1].strip(), m.chat.id), daemon=True).start()
 
 @bot.message_handler(commands=['stop'])
 def stop(m):
     if not is_allowed_chat(m) or not is_admin(m):
-        try: bot.reply_to(m, "Tuổi j ra lệnh?")
+        try: bot.reply_to(m, "Tuổi j ra lệnh?", parse_mode="HTML")
         except: pass
         return
     uid = m.from_user.id
     auto_running[uid] = False
-    delay_delete(m.chat.id, bot.reply_to(m, "Tắt rồi ngon tự làm đi." if auto_running.get(uid, False) else "Có cái mẹ j đang chạy đâu?").message_id, 5)
+    delay_delete(m.chat.id, bot.reply_to(m, "Tắt rồi ngon tự làm đi." if auto_running.get(uid, False) else "Có cái mẹ j đang chạy đâu?", parse_mode="HTML").message_id, 5)
 
 @bot.message_handler(func=lambda m: m.chat.id == ALLOWED_GROUP_ID and m.text)
 def reply_with_ai(m):
@@ -243,7 +256,7 @@ def reply_with_ai(m):
     
     uid, cur_time = m.from_user.id, time.time()
     if uid in ai_cooldowns and (cur_time - ai_cooldowns[uid]) < 4: 
-        return delay_delete(m.chat.id, bot.reply_to(m, "Gõ nhanh vcl thế tml?").message_id, 3)
+        return delay_delete(m.chat.id, bot.reply_to(m, "Gõ nhanh vcl thế tml?", parse_mode="HTML").message_id, 3)
     
     try: bot.send_chat_action(m.chat.id, 'typing')
     except: pass
@@ -257,36 +270,40 @@ def reply_with_ai(m):
     is_reply_to_bot = m.reply_to_message and m.reply_to_message.from_user.id == BOT_INFO.id
     is_tagged_bot = f"@{BOT_INFO.username}" in m.text
     
-    # --- RANDOM CÁC CỤM ICON PREMIUM CHẤT LƯỢNG ---
-    selected_pre_icons = random.choice(["⭐️✨", "⭐🔥", "⭐️👑", "⭐💥", "⭐️⚡", "⭐💎"])
-
-    # ÉP AI CHỈ ĐƯỢC XÀI ICON PREMIUM, CẤM TUYỆT ĐỐI ICON THƯỜNG
     if is_premium:
-        sys_prompt = f"Bạn là anh hùng bàn phím chuyên ghét tụi nhà giàu ảo tưởng. BẮT BUỘC trả lời cực ngắn dưới 10 từ bằng ngôn ngữ mạng teencode nặng. NGHIÊM CẤM dùng các icon mặt cười bình thường (như 🤡, 😏, 😂, 🤣). BẮT BUỘC chèn cụm icon Telegram Premium này vào giữa hoặc cuối câu để sỉ nhục nó: {selected_pre_icons}"
+        sys_prompt = "Bạn là anh hùng bàn phím chuyên ghét tụi nhà giàu ảo tưởng. BẮT BUỘC trả lời cực ngắn dưới 10 từ bằng ngôn ngữ mạng teencode nặng. KHÔNG ĐƯỢC dùng bất kỳ biểu tượng cảm xúc nào."
     else:
         personas = [
-            f"Bạn là anh hùng bàn phím trẻ trâu. BẮT BUỘC trả lời cực ngắn dưới 10 từ. Xài teencode nặng (j, thía, bít, k, vcl, ak, m, t). CẤM dùng icon mặt cười thường, CHỈ ĐƯỢC DÙNG icon Premium này: {selected_pre_icons}",
-            f"Bạn là giáo sư triết học toxic. Chuyên dùng từ ngữ cao siêu mỉa mai đối phương. BẮT BUỘC dưới 10 từ. CẤM dùng icon thường, CHỈ ĐƯỢC dùng cụm icon Premium sau ở cuối câu: {selected_pre_icons}",
-            f"Bạn là tml cụt lủn, bất cần đời. Chỉ rep cực ngắn tầm 3-5 từ để thể hiện sự khinh rẻ. KHÔNG DÙNG icon thường, CHỈ DÙNG đúng cụm icon Premium này: {selected_pre_icons}"
+            "Bạn là anh hùng bàn phím trẻ trâu. BẮT BUỘC trả lời cực ngắn dưới 10 từ. Xài teencode nặng. KHÔNG DÙNG bất kỳ icon emoji nào.",
+            "Bạn là giáo sư triết học toxic. Chuyên dùng từ ngữ mỉa mai đối phương. BẮT BUỘC dưới 10 từ. KHÔNG DÙNG bất kỳ icon emoji nào.",
+            "Bạn là tml cụt lủn, bất cần đời. Chỉ rep cực ngắn tầm 3-5 từ. KHÔNG DÙNG bất kỳ icon emoji nào."
         ]
         sys_prompt = random.choice(personas)
     
     if is_reply_to_bot or is_tagged_bot:
-        sys_prompt = f"Bạn bị đối phương tag/reply đôi co thách thức. Hãy nổi điên lên chửi thẳng mặt cực kỳ vô học và bố đời. BẮT BUỘC rep dưới 10 từ. CẤM dùng icon mặt cười thường, BẮT BUỘC dùng cụm icon Premium hãm tài này ở cuối câu: {selected_pre_icons}"
+        sys_prompt = "Bạn bị đối phương tag/reply đôi co thách thức. Hãy nổi điên lên chửi thẳng mặt cực kỳ vô học và bố đời. BẮT BUỘC rep dưới 10 từ. KHÔNG DÙNG bất kỳ icon emoji nào."
 
     prompt_content = f"Đối tượng chat tên '{user_name}', đặc điểm: {has_username}, {is_premium_text}. Nó vừa sủa câu này: {m.text}. Hãy phản hồi đốp chát thẳng vào mõm nó."
 
-    Thread(target=lambda: delay_delete(m.chat.id, bot.reply_to(m, ask_ai(prompt_content, custom_sys=sys_prompt, u_id=uid)).message_id), daemon=True).start()
+    def run_reply():
+        reply_text = ask_ai(prompt_content, custom_sys=sys_prompt, u_id=uid)
+        icon_pre = "".join(random.sample(PRE_ICONS_LIST, 2))
+        final_msg = f"{html.escape(reply_text)} {icon_pre}"
+        delay_delete(m.chat.id, bot.reply_to(m, final_msg, parse_mode="HTML").message_id)
+
+    Thread(target=run_reply, daemon=True).start()
 
 @bot.message_handler(content_types=['new_chat_members'])
 def welcome_new_member(m):
     if is_allowed_chat(m):
-        for u in m.new_chat_members: delay_delete(m.chat.id, bot.send_message(m.chat.id, f"Lại thêm một tml ngu tên `{u.first_name}` vào.").message_id, 60)
+        icon = random.choice(PRE_ICONS_LIST)
+        for u in m.new_chat_members: 
+            delay_delete(m.chat.id, bot.send_message(m.chat.id, f"Lại thêm một tml ngu tên <b>{html.escape(u.first_name)}</b> vào. {icon}", parse_mode="HTML").message_id, 60)
 
 def auto_worker(uid, url, chat_id):
     while auto_running.get(uid, False):
         suc, res = execute_buff_api(url)
-        delay_delete(chat_id, bot.send_message(chat_id, f"[AUTO]\n{res}", parse_mode="Markdown" if suc else None).message_id, 120 if suc else 30)
+        bot.send_message(chat_id, f"[AUTO]\n{res}", parse_mode="HTML")
         for _ in range(AUTO_DELAY):
             if not auto_running.get(uid, False): return
             time.sleep(1)
@@ -296,22 +313,23 @@ def execute_buff_api(url):
         api_endpoint = f"http://180.93.32.186:1817/api/buff/start?link={urllib.parse.quote(url)}"
         res = http_session.get(api_endpoint, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
         t = datetime.now(VN_TZ).strftime("%H:%M - %d/%m")
+        icon = random.choice(PRE_ICONS_LIST)
         
         if res.status_code == 200:
             try:
                 res.encoding = 'utf-8'
                 d = res.json()
-                user_info = d.get('username') or d.get('user') or 'TikTok User'
-                status_info = d.get('added') or d.get('count') or d.get('msg') or 'Đang xử lý'
-                return True, f"Buff xong\nUser: {user_info}\nStatus: {status_info}\nTime: {t}"
+                user_info = html.escape(d.get('username') or d.get('user') or 'TikTok User')
+                status_info = html.escape(d.get('added') or d.get('count') or d.get('msg') or 'Đang xử lý')
+                return f"Buff xong {icon}\nUser: <b>{user_info}</b>\nStatus: {status_info}\nTime: {t}"
             except: 
-                return True, f"Buff xong\nUser: Hệ thống\nStatus: Đang chạy\nTime: {t}"
-        return False, f"Server oẳng rùi (Mã {res.status_code})"
-    except Timeout: return False, "Nghẽn mạng rồi chờ đi."
-    except RequestException: return False, "Mất kết nối server."
-    except: return False, "Lỗi rồi."
+                return f"Buff xong {icon}\nUser: Hệ thống\nStatus: Đang chạy\nTime: {t}"
+        return f"Server oẳng rùi (Mã {res.status_code}) {icon}"
+    except Timeout: return f"Nghẽn mạng rồi chờ đi. {icon}"
+    except RequestException: return f"Mất kết nối server. {icon}"
+    except: return f"Lỗi rồi. {icon}"
 
 if __name__ == "__main__":
-    print("Bot khởi chạy...")
+    print("Bot khởi chạy thành công...")
     Thread(target=auto_khia_worker, daemon=True).start()
     bot.infinity_polling(timeout=60, long_polling_timeout=30, none_stop=True)
