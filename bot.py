@@ -32,9 +32,6 @@ MAX_USER_MEMORY = 4
 
 TELE_LINK_PATTERN = re.compile(r'(t\.me|telegram\.me|telegram\.org)\/[a-zA-Z0-9_]+|@[a-zA-Z0-9_]{5,}')
 
-# --- THAY ĐỔI: Sử dụng bộ mã hóa Unicode đặc biệt hiển thị chuẩn trên mọi acc ---
-PRE_ICONS_LIST = ["⚡️", "✨", "🔥", "👑", "💎", "🔮", "🎯", "🚀"]
-
 AI_KEYS = [
     {"key": "sk-d92be6f49626610cee386cf85897fe353cd5fadc44f66a73e98a0cce3efdfd8d", "url": "https://api.byesu.com/v1/chat/completions", "model": "gpt-4o", "status": True},  
     {"key": "sk-d1c9defa13eaa7386af8f711f38e9e8dd7a4754c9eebfe7f5642a391db82c2c3", "url": "https://api.byesu.com/v1/chat/completions", "model": "gpt-4o", "status": True},
@@ -82,9 +79,8 @@ def check_and_delete_tele_link(m):
     if TELE_LINK_PATTERN.search(text_to_check):
         try:
             bot.delete_message(m.chat.id, m.message_id)
-            warn_msg = ask_ai("Cấm quảng cáo link.", u_id=m.from_user.id)
-            icon = random.choice(PRE_ICONS_LIST)
-            delay_delete(m.chat.id, bot.send_message(m.chat.id, f"⚠️ {html.escape(warn_msg)} {icon}", parse_mode="HTML").message_id, 30)
+            warn_msg = ask_ai("Yêu cầu người dùng không gửi link quảng cáo.", u_id=m.from_user.id)
+            delay_delete(m.chat.id, bot.send_message(m.chat.id, f"⚠️ {html.escape(warn_msg)}", parse_mode="HTML").message_id, 30)
         except: pass
         return True
     return False
@@ -115,14 +111,16 @@ def ask_ai(prompt, custom_sys=None, u_id=None):
         headers = {"Authorization": f"Bearer {act['key']}", "Content-Type": "application/json"}
         for model in [act["model"], "gpt-4o-mini"]:
             try:
-                res = http_session.post(act["url"], json={"model": model, "messages": messages, "max_tokens": 20, "temperature": 0.5}, headers=headers, timeout=12)
+                # Tăng max_tokens lên 100 để bot phản hồi đầy đủ logic và thông minh hơn
+                res = http_session.post(act["url"], json={"model": model, "messages": messages, "max_tokens": 100, "temperature": 0.7}, headers=headers, timeout=12)
                 if res.status_code == 200:
                     res.encoding = 'utf-8'
                     reply = res.json()['choices'][0]['message']['content'].strip()
                     
+                    # Giới hạn tin nhắn ngắn gọn (Tối đa 15 từ) để không bị loãng hội thoại
                     words = reply.split()
-                    if len(words) > 5:
-                        reply = " ".join(words[:5]) + "..."
+                    if len(words) > 15:
+                        reply = " ".join(words[:15]) + "..."
                     
                     if u_id:
                         u_mem.append({"role": "user", "content": prompt})
@@ -162,14 +160,13 @@ def handle_incoming_file(m):
             _, ext = os.path.splitext(m.document.file_name.lower())
             
             user_name = m.from_user.first_name
-            sys_p = "Bạn là trợ lý code. Nhận xét ngắn gọn dưới 5 từ."
-            res = ask_ai(f"File {ext}:\n\n{content}", custom_sys=sys_p, u_id=uid)
+            sys_p = "Bạn là trợ lý lập trình chuyên nghiệp. Phản hồi ngắn gọn và chuẩn xác thông tin kỹ thuật dưới 15 từ."
+            res = ask_ai(f"Phân tích nội dung file {ext} sau:\n\n{content}", custom_sys=sys_p, u_id=uid)
             
             try: bot.delete_message(m.chat.id, loading.message_id)
             except: pass
-            icon_pre = "".join(random.sample(PRE_ICONS_LIST, 2))
             
-            final_response = f"Kết quả cho <b>{html.escape(user_name)}</b>:\n\n<pre><code>{html.escape(res)}</code></pre> {icon_pre}"
+            final_response = f"Kết quả cho <b>{html.escape(user_name)}</b>:\n\n{html.escape(res)}"
             delay_delete(m.chat.id, bot.reply_to(m, final_response, parse_mode="HTML").message_id)
         except: bot.edit_message_text("Lỗi phân tích file.", m.chat.id, loading.message_id, parse_mode="HTML")
     Thread(target=process_file, daemon=True).start()
@@ -177,7 +174,7 @@ def handle_incoming_file(m):
 @bot.message_handler(commands=['start'])
 def start(m):
     if not is_allowed_chat(m): return
-    text = "<b>Hệ thống sẵn sàng.</b>\n<pre>/like [link] : Buff tim.\n/auto [link] : Auto.\n/stop : Tắt.</pre>"
+    text = "<b>Hệ thống sẵn sàng.</b>\n/like [link] : Buff tim.\n/auto [link] : Auto.\n/stop : Tắt."
     delay_delete(m.chat.id, bot.reply_to(m, text, parse_mode="HTML").message_id)
 
 @bot.message_handler(commands=['like'])
@@ -236,15 +233,14 @@ def reply_with_ai(m):
     except: pass
     ai_cooldowns[uid] = cur_time  
     
-    user_name = m.from_user.first_name
-    sys_prompt = "Bạn là trợ lý nhóm. Trả lời hữu ích và BẮT BUỘC dưới 5 từ."
-    prompt_content = f"Người dùng '{user_name}': {m.text}."
+    # Tối ưu hóa prompt hệ thống: Tập trung xử lý logic thông minh và tự nhiên, không đóng vai toxic
+    sys_prompt = "Bạn là trợ lý thông minh. Hãy trả lời câu hỏi trực tiếp, tự nhiên, ngắn gọn và giới hạn dưới 15 từ."
+    prompt_content = f"{m.text}"
 
     def run_reply():
         try:
             reply_text = ask_ai(prompt_content, custom_sys=sys_prompt, u_id=uid)
-            icon_pre = "".join(random.sample(PRE_ICONS_LIST, 2))
-            final_msg = f"{html.escape(reply_text)} {icon_pre}"
+            final_msg = f"{html.escape(reply_text)}"
             delay_delete(m.chat.id, bot.reply_to(m, final_msg, parse_mode="HTML").message_id)
         except: pass
 
@@ -253,9 +249,8 @@ def reply_with_ai(m):
 @bot.message_handler(content_types=['new_chat_members'])
 def welcome_new_member(m):
     if is_allowed_chat(m):
-        icon = random.choice(PRE_ICONS_LIST)
         for u in m.new_chat_members: 
-            delay_delete(m.chat.id, bot.send_message(m.chat.id, f"Chào mừng <b>{html.escape(u.first_name)}</b>. {icon}", parse_mode="HTML").message_id, 60)
+            delay_delete(m.chat.id, bot.send_message(m.chat.id, f"Chào mừng <b>{html.escape(u.first_name)}</b> gia nhập nhóm.", parse_mode="HTML").message_id, 60)
 
 def auto_worker(uid, url, chat_id):
     while auto_running.get(uid, False):
@@ -270,7 +265,6 @@ def execute_buff_api(url):
         api_endpoint = f"http://180.93.32.186:1817/api/buff/start?link={urllib.parse.quote(url)}"
         res = http_session.get(api_endpoint, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
         t = datetime.now(VN_TZ).strftime("%H:%M - %d/%m")
-        icon = random.choice(PRE_ICONS_LIST)
         
         if res.status_code == 200:
             try:
@@ -278,14 +272,14 @@ def execute_buff_api(url):
                 d = res.json()
                 user_info = html.escape(d.get('username') or d.get('user') or 'TikTok User')
                 status_info = html.escape(d.get('added') or d.get('count') or d.get('msg') or 'Đang xử lý')
-                output = f"Buff xong {icon}\n<pre>User: {user_info}\nStatus: {status_info}\nTime: {t}</pre>"
+                output = f"Buff hoàn tất\nUser: {user_info}\nStatus: {status_info}\nTime: {t}"
                 return output
             except: 
-                return f"Buff xong {icon}\n<pre>User: Hệ thống\nStatus: Chạy\nTime: {t}</pre>"
-        return f"Mã lỗi {res.status_code} {icon}"
-    except Timeout: return f"Hệ thống chậm. {icon}"
-    except RequestException: return f"Lỗi kết nối API. {icon}"
-    except: return f"Lỗi ẩn. {icon}"
+                return f"Buff hoàn tất\nUser: Hệ thống\nStatus: Chạy\nTime: {t}"
+        return f"Mã lỗi {res.status_code}"
+    except Timeout: return "Hệ thống chậm."
+    except RequestException: return "Lỗi kết nối API."
+    except: return "Lỗi hệ thống."
 
 if __name__ == "__main__":
     print("Bot khởi chạy thành công...")
