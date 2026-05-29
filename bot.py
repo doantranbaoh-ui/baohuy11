@@ -34,7 +34,7 @@ AUTO_KHIA_INTERVAL = 1800
 
 TELE_LINK_PATTERN = re.compile(r'(t\.me|telegram\.me|telegram\.org)\/[a-zA-Z0-9_]+|@[a-zA-Z0-9_]{5,}')
 
-# --- HỆ THỐNG CUSTOM EMOJI PREMIUM ĐỘNG HOÀN CHỈNH ---
+# --- ĐỊNH DẠNG HOÀN CHỈNH TAG CUSTOM EMOJI PREMIUM ---
 PRE_ICONS_LIST = [
     '<tg-emoji emoji-id="5431447214631033120">⭐️</tg-emoji>', 
     '<tg-emoji emoji-id="5431609312157771741">✨</tg-emoji>', 
@@ -112,6 +112,7 @@ def ask_ai(prompt, custom_sys=None, u_id=None):
     u_mem = user_memories.get(u_id, []) if u_id else group_memory
     messages = [{"role": "system", "content": custom_sys}] + u_mem + [{"role": "user", "content": prompt}]
     
+    # --- FIX SẬP: Tự động hồi sinh toàn bộ key nếu tất cả đều đang die ---
     if not any(k["status"] for k in AI_KEYS):
         for item in AI_KEYS: item["status"] = True
 
@@ -129,7 +130,6 @@ def ask_ai(prompt, custom_sys=None, u_id=None):
                     res.encoding = 'utf-8'
                     reply = res.json()['choices'][0]['message']['content'].strip()
                     
-                    # Nghiêm ngặt giới hạn dưới 10 từ
                     words = reply.split()
                     if len(words) > 10:
                         reply = " ".join(words[:9]) + "..."
@@ -147,6 +147,7 @@ def ask_ai(prompt, custom_sys=None, u_id=None):
             except: 
                 break
                 
+        # Đánh dấu key lỗi để chuyển sang key kế tiếp
         AI_KEYS[current_key_index]["status"] = False
         current_key_index = (current_key_index + 1) % len(AI_KEYS)
             
@@ -196,14 +197,16 @@ def handle_incoming_file(m):
             try: bot.delete_message(m.chat.id, loading.message_id)
             except: pass
             icon_pre = "".join(random.sample(PRE_ICONS_LIST, 2))
-            delay_delete(m.chat.id, bot.reply_to(m, f"Sửa xong rồi đấy tml <b>{html.escape(user_name)}</b>:\n\n{html.escape(res)} {icon_pre}", parse_mode="HTML").message_id)
+            
+            final_response = f"Sửa xong rồi đấy tml <b>{html.escape(user_name)}</b>:\n\n<pre><code>{html.escape(res)}</code></pre> {icon_pre}"
+            delay_delete(m.chat.id, bot.reply_to(m, final_response, parse_mode="HTML").message_id)
         except: bot.edit_message_text("Code ngu làm lỗi bot rồi.", m.chat.id, loading.message_id, parse_mode="HTML")
     Thread(target=process_file, daemon=True).start()
 
 @bot.message_handler(commands=['start'])
 def start(m):
     if not is_allowed_chat(m): return
-    text = "Khởi chạy.\n/like [link] : Buff tim.\n/auto [link] : Auto.\n/stop : Tắt."
+    text = "<b>Khởi chạy thành công.</b>\n<pre>/like [link] : Buff tim.\n/auto [link] : Auto.\n/stop : Tắt hệ thống.</pre>"
     delay_delete(m.chat.id, bot.reply_to(m, text, parse_mode="HTML").message_id)
 
 @bot.message_handler(commands=['like'])
@@ -286,10 +289,12 @@ def reply_with_ai(m):
     prompt_content = f"Đối tượng chat tên '{user_name}', đặc điểm: {has_username}, {is_premium_text}. Nó vừa sủa câu này: {m.text}. Hãy phản hồi đốp chát thẳng vào mõm nó."
 
     def run_reply():
-        reply_text = ask_ai(prompt_content, custom_sys=sys_prompt, u_id=uid)
-        icon_pre = "".join(random.sample(PRE_ICONS_LIST, 2))
-        final_msg = f"{html.escape(reply_text)} {icon_pre}"
-        delay_delete(m.chat.id, bot.reply_to(m, final_msg, parse_mode="HTML").message_id)
+        try:
+            reply_text = ask_ai(prompt_content, custom_sys=sys_prompt, u_id=uid)
+            icon_pre = "".join(random.sample(PRE_ICONS_LIST, 2))
+            final_msg = f"{html.escape(reply_text)} {icon_pre}"
+            delay_delete(m.chat.id, bot.reply_to(m, final_msg, parse_mode="HTML").message_id)
+        except: pass
 
     Thread(target=run_reply, daemon=True).start()
 
@@ -321,9 +326,10 @@ def execute_buff_api(url):
                 d = res.json()
                 user_info = html.escape(d.get('username') or d.get('user') or 'TikTok User')
                 status_info = html.escape(d.get('added') or d.get('count') or d.get('msg') or 'Đang xử lý')
-                return f"Buff xong {icon}\nUser: <b>{user_info}</b>\nStatus: {status_info}\nTime: {t}"
+                output = f"Buff xong {icon}\n<pre>User: {user_info}\nStatus: {status_info}\nTime: {t}</pre>"
+                return output
             except: 
-                return f"Buff xong {icon}\nUser: Hệ thống\nStatus: Đang chạy\nTime: {t}"
+                return f"Buff xong {icon}\n<pre>User: Hệ thống\nStatus: Đang chạy\nTime: {t}</pre>"
         return f"Server oẳng rùi (Mã {res.status_code}) {icon}"
     except Timeout: return f"Nghẽn mạng rồi chờ đi. {icon}"
     except RequestException: return f"Mất kết nối server. {icon}"
