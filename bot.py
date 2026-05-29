@@ -27,10 +27,13 @@ COOLDOWN_TIME, AI_COOLDOWN_TIME, AUTO_DELAY, DELETE_DELAY = 7, 15, 600, 300
 MEMORY_FILE, MAX_MEMORY_KEYS, MAX_FILE_SIZE_KB = "bot_memory.json", 20, 500
 memory_lock = Lock()      
 
+# --- CẢI TIẾN: BỘ NHỚ NGẮN HẠN RIÊNG CHO TỪNG USER ---
+user_memories = {}
+MAX_USER_MEMORY = 4  # Lưu tối đa 2 cặp hội thoại gần nhất của cá nhân đó
+
 AUTO_KHIA_INTERVAL = 1800  
 
 TELE_LINK_PATTERN = re.compile(r'(t\.me|telegram\.me|telegram\.org)\/[a-zA-Z0-9_]+|@[a-zA-Z0-9_]{5,}')
-SPAM_TEXT_PATTERN = re.compile(r'To use this bot,\s*you must join our channel', re.IGNORECASE)
 
 AI_KEYS = [
     {"key": "sk-d92be6f49626610cee386cf85897fe353cd5fadc44f66a73e98a0cce3efdfd8d", "url": "https://api.byesu.com/v1/chat/completions", "model": "gpt-4o", "status": True},  
@@ -79,10 +82,10 @@ def check_and_delete_tele_link(m):
     if m.text: text_to_check += m.text
     if m.caption: text_to_check += m.caption
     
-    if TELE_LINK_PATTERN.search(text_to_check) or SPAM_TEXT_PATTERN.search(text_to_check):
+    if TELE_LINK_PATTERN.search(text_to_check):
         try:
             bot.delete_message(m.chat.id, m.message_id)
-            cay_msg = ask_ai("Chửi một câu cực gắt khinh bỉ tml định quảng cáo bẩn.")
+            cay_msg = ask_ai("Chửi một câu cực gắt khinh bỉ tml định quảng cáo bẩn.", u_id=m.from_user.id)
             delay_delete(m.chat.id, bot.send_message(m.chat.id, f"⚠️ {cay_msg}").message_id, 30)
         except: pass
         return True
@@ -95,11 +98,12 @@ def backup_free_ai(msgs):
     except: pass
     return "Sập rồi tml."
 
-def ask_ai(prompt, custom_sys=None):
-    global current_key_index, group_memory
-    # Ép system prompt giới hạn dưới 10 từ nghiêm ngặt
-    sys_prompt = custom_sys if custom_sys else "Bạn là một thằng anh hùng bàn phím vô học, cộc cằn. BẮT BUỘC trả lời cực ngắn, dưới 10 từ. Sử dụng ngôn ngữ mạng, teencode nặng (j, thía, bít, k, vcl, ak, m, t) kèm icon hãm (🤡, 😏, 😮‍💨). Không chào hỏi."
-    messages = [{"role": "system", "content": sys_prompt}] + group_memory + [{"role": "user", "content": prompt}]
+def ask_ai(prompt, custom_sys=None, u_id=None):
+    global current_key_index, group_memory, user_memories
+    
+    # Lấy lịch sử chat riêng của thằng này nếu có u_id, không thì dùng bộ nhớ chung
+    u_mem = user_memories.get(u_id, []) if u_id else group_memory
+    messages = [{"role": "system", "content": custom_sys}] + u_mem + [{"role": "user", "content": prompt}]
     
     for _ in range(len(AI_KEYS)):
         act = AI_KEYS[current_key_index]
@@ -109,11 +113,25 @@ def ask_ai(prompt, custom_sys=None):
         headers = {"Authorization": f"Bearer {act['key']}", "Content-Type": "application/json"}
         for model in [act["model"], "gpt-4o-mini", "gpt-3.5-turbo"]:
             try:
-                res = http_session.post(act["url"], json={"model": model, "messages": messages, "max_tokens": 50, "temperature": 0.9}, headers=headers, timeout=15)
+                # Giảm hẳn max_tokens xuống 30 để ép phần cứng cắt chữ nếu AI văn vở
+                res = http_session.post(act["url"], json={"model": model, "messages": messages, "max_tokens": 30, "temperature": 0.9}, headers=headers, timeout=15)
                 if res.status_code == 200:
                     res.encoding = 'utf-8'
                     reply = res.json()['choices'][0]['message']['content'].strip()
-                    save_memory(messages[1:] + [{"role": "assistant", "content": reply}])
+                    
+                    # --- CẢI TIẾN: HARD CUT-OFF BIÊN TẬP LẠI NẾU AI PHUN QUÁ 10 TỪ ---
+                    words = reply.split()
+                    if len(words) > 10:
+                        reply = " ".join(words[:9]) + "... 🤡"
+                    
+                    # Cập nhật bộ nhớ tương ứng
+                    if u_id:
+                        u_mem.append({"role": "user", "content": prompt})
+                        u_mem.append({"role": "assistant", "content": reply})
+                        user_memories[u_id] = u_mem[-MAX_USER_MEMORY:]
+                    else:
+                        save_memory(messages[1:] + [{"role": "assistant", "content": reply}])
+                        
                     return reply
                 if res.status_code in [400, 404]: continue
                 if res.status_code in [401, 403, 429]: break
@@ -135,7 +153,9 @@ def auto_khia_worker():
         time.sleep(AUTO_KHIA_INTERVAL)
         try:
             topic = random.choice(khia_topics)
-            msg_khia = ask_ai(topic)
+            # Hệ thống auto khịa dùng nhân cách trẻ trâu mặc định
+            sys_p = "Bạn là một thằng anh hùng bàn phím vô học. BẮT BUỘC trả lời cực ngắn dưới 10 từ. Sử dụng ngôn ngữ mạng teencode nặng (j, thía, bít, k, vcl) kèm icon hãm (🤡, 😏)."
+            msg_khia = ask_ai(topic, custom_sys=sys_p)
             if "Sập rồi" not in msg_khia:
                 delay_delete(ALLOWED_GROUP_ID, bot.send_message(ALLOWED_GROUP_ID, msg_khia).message_id)
         except: pass
@@ -160,7 +180,8 @@ def handle_incoming_file(m):
             _, ext = os.path.splitext(m.document.file_name.lower())
             
             user_name = m.from_user.first_name
-            res = ask_ai(f"Thằng rách tên '{user_name}' gửi file {ext} này. Trả về code đã sửa ngắn nhất để khịa nó:\n\n{content}")
+            sys_p = "Bạn là thằng cộc cằn, bắt lỗi code rác. BẮT BUỘC chửi cực ngắn gọn dưới 10 từ."
+            res = ask_ai(f"Thằng rách tên '{user_name}' gửi file {ext} này. Trả về câu khịa ngắn gọn chê bai logic của nó:\n\n{content}", custom_sys=sys_p, u_id=uid)
             
             try: bot.delete_message(m.chat.id, loading.message_id)
             except: pass
@@ -230,18 +251,29 @@ def reply_with_ai(m):
     except: pass
     ai_cooldowns[uid] = cur_time  
     
+    # --- CẢI TIẾN: GOM TRỘN METADATA ĐỂ BÓC PHỐT CÁ NHÂN ---
     user_name = m.from_user.first_name
+    has_username = "CÓ username" if m.from_user.username else "KHÔNG CÓ username (acc rác rưởi)"
+    is_premium = "acc giàu xài Telegram Premium" if m.from_user.is_premium else "acc nghèo rách không có Premium"
+    
     is_reply_to_bot = m.reply_to_message and m.reply_to_message.from_user.id == BOT_INFO.id
     is_tagged_bot = f"@{BOT_INFO.username}" in m.text
     
-    # Ép cấu trúc hệ thống giới hạn 10 từ gắt gao khi chửi trực diện
-    sys_prompt = "Bạn là một thằng anh hùng bàn phím vô học, cộc cằn. BẮT BUỘC trả lời cực ngắn, dưới 10 từ. Sử dụng ngôn ngữ mạng, teencode nặng (j, thía, bít, k, vcl, ak, m, t) kèm icon hãm (🤡, 😏, 😮‍💨). Không chào hỏi."
+    # --- CẢI TIẾN: RANDOM NHÂN CÁCH CHỬI ---
+    personas = [
+        "Bạn là anh hùng bàn phím trẻ trâu. BẮT BUỘC trả lời cực ngắn dưới 10 từ. Xài teencode nặng (j, thía, bít, k, vcl, ak, m, t), chèn icon hãm (🤡, 😏, 😮‍اظ). Không chào hỏi.",
+        "Bạn là giáo sư triết học toxic. Chuyên dùng từ ngữ cao siêu, thâm sâu để mỉa mai sự ngu dốt của đối phương. BẮT BUỘC dưới 10 từ, cực khinh bỉ.",
+        "Bạn là tml cụt lủn, bất cần đời. Chỉ rep cực ngắn tầm 3-5 từ để thể hiện sự khinh rẻ tột cùng, chê đối phương phiền phức (Ví dụ: Kệ m chứ 🤡, Liên quan j t 😏)."
+    ]
+    sys_prompt = random.choice(personas)
+    
+    # Nếu bị rep hoặc tag thẳng tên, kích hoạt chế độ hóa điên x2
     if is_reply_to_bot or is_tagged_bot:
-        sys_prompt = "Bạn đang bị một tml rách tag hoặc reply đôi co. Hãy nổi điên lên chửi thẳng mặt nó. ÉP BUỘC trả lời dưới 10 từ, ngắn gọn, teencode nặng, cực hãm tài (🤡, 😏)."
+        sys_prompt = "Bạn bị đối phương tag tên/reply đôi co thách thức. Hãy nổi điên lên chửi thẳng mặt nó cực kỳ vô học và bố đời. BẮT BUỘC rep dưới 10 từ, siêu hãm tài (🤡, 😏)."
 
-    prompt_content = f"Thằng rách tên '{user_name}' vừa sủa câu này: {m.text}. Hãy phản hồi đốp chát trực diện nó."
+    prompt_content = f"Đối tượng chat tên '{user_name}', đặc điểm: {has_username}, {is_premium}. Nó vừa sủa câu này: {m.text}. Hãy phản hồi đốp chát thẳng vào mõm nó."
 
-    Thread(target=lambda: delay_delete(m.chat.id, bot.reply_to(m, ask_ai(prompt_content, custom_sys=sys_prompt)).message_id), daemon=True).start()
+    Thread(target=lambda: delay_delete(m.chat.id, bot.reply_to(m, ask_ai(prompt_content, custom_sys=sys_prompt, u_id=uid)).message_id), daemon=True).start()
 
 @bot.message_handler(content_types=['new_chat_members'])
 def welcome_new_member(m):
