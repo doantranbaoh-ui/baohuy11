@@ -27,9 +27,6 @@ COOLDOWN_TIME, AI_COOLDOWN_TIME, AUTO_DELAY, DELETE_DELAY = 7, 15, 600, 300
 MEMORY_FILE, MAX_MEMORY_KEYS, MAX_FILE_SIZE_KB = "bot_memory.json", 20, 500
 memory_lock = Lock()      
 
-user_memories = {}
-MAX_USER_MEMORY = 4  
-
 TELE_LINK_PATTERN = re.compile(r'(t\.me|telegram\.me|telegram\.org)\/[a-zA-Z0-9_]+|@[a-zA-Z0-9_]{5,}')
 
 AI_KEYS = [
@@ -42,7 +39,9 @@ current_key_index = 0
 def load_memory():
     if os.path.exists(MEMORY_FILE) and (os.path.getsize(MEMORY_FILE) / 1024) <= MAX_FILE_SIZE_KB:
         try:
-            with open(MEMORY_FILE, "r", encoding="utf-8") as f: return json.load(f)
+            with open(MEMORY_FILE, "r", encoding="utf-8") as f: 
+                data = json.load(f)
+                return data if isinstance(data, list) else []
         except: pass
     return []
 
@@ -51,7 +50,8 @@ def save_memory(memory_data):
     with memory_lock:
         try:
             group_memory = memory_data[-MAX_MEMORY_KEYS:]
-            with open(MEMORY_FILE, "w", encoding="utf-8") as f: json.dump(group_memory, f, ensure_ascii=False, indent=4)
+            with open(MEMORY_FILE, "w", encoding="utf-8") as f: 
+                json.dump(group_memory, f, ensure_ascii=False, indent=4)
         except: pass
 
 group_memory = load_memory()
@@ -79,7 +79,7 @@ def check_and_delete_tele_link(m):
     if TELE_LINK_PATTERN.search(text_to_check):
         try:
             bot.delete_message(m.chat.id, m.message_id)
-            warn_msg = ask_ai("Yêu cầu người dùng không gửi link quảng cáo.", u_id=m.from_user.id)
+            warn_msg = ask_ai("Thông báo cấm link quảng cáo nhóm khác.")
             delay_delete(m.chat.id, bot.send_message(m.chat.id, f"⚠️ {html.escape(warn_msg)}", parse_mode="HTML").message_id, 30)
         except: pass
         return True
@@ -91,13 +91,17 @@ def backup_free_ai(msgs):
         if res.status_code == 200: 
             return res.json()['choices'][0]['message']['content'].strip()
     except: pass
-    return "Lỗi AI."
+    return "Hệ thống bận."
 
-def ask_ai(prompt, custom_sys=None, u_id=None):
-    global current_key_index, group_memory, user_memories
+def ask_ai(prompt, custom_sys=None):
+    global current_key_index, group_memory
     
-    u_mem = user_memories.get(u_id, []) if u_id else group_memory
-    messages = [{"role": "system", "content": custom_sys}] + u_mem + [{"role": "user", "content": prompt}]
+    # CẬP NHẬT: Đẩy trực tiếp tin nhắn chữ hiện tại vào danh sách lịch sử trước khi gửi API
+    group_memory.append({"role": "user", "content": prompt})
+    
+    # Định hình cấu trúc gửi dữ liệu cho AI
+    sys_content = custom_sys if custom_sys else "Bạn là trợ lý thông minh. Trả lời câu hỏi trực tiếp, ngắn gọn dưới 15 từ."
+    messages = [{"role": "system", "content": sys_content}] + group_memory[-MAX_MEMORY_KEYS:]
     
     if not any(k["status"] for k in AI_KEYS):
         for item in AI_KEYS: item["status"] = True
@@ -111,25 +115,21 @@ def ask_ai(prompt, custom_sys=None, u_id=None):
         headers = {"Authorization": f"Bearer {act['key']}", "Content-Type": "application/json"}
         for model in [act["model"], "gpt-4o-mini"]:
             try:
-                # Tăng max_tokens lên 100 để bot phản hồi đầy đủ logic và thông minh hơn
-                res = http_session.post(act["url"], json={"model": model, "messages": messages, "max_tokens": 100, "temperature": 0.7}, headers=headers, timeout=12)
+                res = http_session.post(act["url"], json={"model": model, "messages": messages, "max_tokens": 120, "temperature": 0.7}, headers=headers, timeout=12)
                 if res.status_code == 200:
                     res.encoding = 'utf-8'
-                    reply = res.json()['choices'][0]['message']['content'].strip()
+                    full_reply = res.json()['choices'][0]['message']['content'].strip()
                     
-                    # Giới hạn tin nhắn ngắn gọn (Tối đa 15 từ) để không bị loãng hội thoại
-                    words = reply.split()
-                    if len(words) > 15:
-                        reply = " ".join(words[:15]) + "..."
+                    # Thêm câu trả lời hoàn chỉnh của AI vào dòng ngữ cảnh lịch sử
+                    group_memory.append({"role": "assistant", "content": full_reply})
+                    save_memory(group_memory)
                     
-                    if u_id:
-                        u_mem.append({"role": "user", "content": prompt})
-                        u_mem.append({"role": "assistant", "content": reply})
-                        user_memories[u_id] = u_mem[-MAX_USER_MEMORY:]
-                    else:
-                        save_memory(messages[1:] + [{"role": "assistant", "content": reply}])
+                    # Giới hạn số lượng hiển thị ra ngoài Telegram nhóm
+                    display_words = full_reply.split()
+                    if len(display_words) > 15:
+                        return " ".join(display_words[:15]) + "..."
+                    return full_reply
                     
-                    return reply
                 if res.status_code in [400, 404]: continue
                 if res.status_code in [401, 403, 429]: break
             except: 
@@ -160,8 +160,8 @@ def handle_incoming_file(m):
             _, ext = os.path.splitext(m.document.file_name.lower())
             
             user_name = m.from_user.first_name
-            sys_p = "Bạn là trợ lý lập trình chuyên nghiệp. Phản hồi ngắn gọn và chuẩn xác thông tin kỹ thuật dưới 15 từ."
-            res = ask_ai(f"Phân tích nội dung file {ext} sau:\n\n{content}", custom_sys=sys_p, u_id=uid)
+            sys_p = "Bạn là trợ lý phân tích mã nguồn. Nhận xét ngắn gọn dưới 15 từ."
+            res = ask_ai(f"Mã nguồn file {ext}:\n\n{content}", custom_sys=sys_p)
             
             try: bot.delete_message(m.chat.id, loading.message_id)
             except: pass
@@ -226,20 +226,19 @@ def reply_with_ai(m):
     if m.text.startswith('/'): return
     
     uid, cur_time = m.from_user.id, time.time()
-    if uid in ai_cooldowns and (cur_time - ai_cooldowns[uid]) < 4: 
+    if uid in ai_cooldowns and (cur_time - ai_cooldowns[uid]) < 3: 
         return delay_delete(m.chat.id, bot.reply_to(m, "Đừng gửi liên tục.", parse_mode="HTML").message_id, 3)
     
     try: bot.send_chat_action(m.chat.id, 'typing')
     except: pass
     ai_cooldowns[uid] = cur_time  
     
-    # Tối ưu hóa prompt hệ thống: Tập trung xử lý logic thông minh và tự nhiên, không đóng vai toxic
-    sys_prompt = "Bạn là trợ lý thông minh. Hãy trả lời câu hỏi trực tiếp, tự nhiên, ngắn gọn và giới hạn dưới 15 từ."
-    prompt_content = f"{m.text}"
+    user_name = m.from_user.first_name
+    prompt_content = f"{user_name}: {m.text}"
 
     def run_reply():
         try:
-            reply_text = ask_ai(prompt_content, custom_sys=sys_prompt, u_id=uid)
+            reply_text = ask_ai(prompt_content)
             final_msg = f"{html.escape(reply_text)}"
             delay_delete(m.chat.id, bot.reply_to(m, final_msg, parse_mode="HTML").message_id)
         except: pass
