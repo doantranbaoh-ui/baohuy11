@@ -16,6 +16,7 @@ VN_TZ = pytz.timezone('Asia/Ho_Chi_Minh')
 keep_alive()
 
 BOT_INFO = bot.get_me() 
+BOT_USERNAME = f"@{BOT_INFO.username}" # Tự động lấy username của bot để bắt tag
 
 http_session = requests.Session()
 adapter = requests.adapters.HTTPAdapter(pool_connections=20, pool_maxsize=30)
@@ -98,7 +99,6 @@ def ask_ai(prompt, custom_sys=None):
     
     group_memory.append({"role": "user", "content": prompt})
     
-    # TÍNH NĂNG CHỬI THẤM: Ép AI chửi sâu cay, châm biếm nặng nề, xoáy vào trọng tâm, dùng từ ngữ đanh đá
     sys_content = custom_sys if custom_sys else (
         "Bạn là một kẻ mỏ hỗn thiên tài, chuyên chửi bới châm biếm cực kỳ sâu cay và thấm thía. "
         "Hãy nói chuyện với giọng trịch thượng, khinh bỉ, dùng từ ngữ xéo xắt cắt sâu vào lòng tự ái của người khác. "
@@ -232,6 +232,10 @@ def reply_with_ai(m):
     if uid in ai_cooldowns and (cur_time - ai_cooldowns[uid]) < 3: 
         return delay_delete(m.chat.id, bot.reply_to(m, "Cào phím ít thôi, mún sập nguồn à thg điên 🤡", parse_mode="HTML").message_id, 3)
     
+    # KIỂM TRA ĐIỀU KIỆN TAG @ HOẶC REPLY TIN NHẮN CỦA BOT ĐỂ KÍCH HOẠT LỆNH CHỬI
+    is_tagged = BOT_USERNAME in m.text
+    is_reply_to_bot = m.reply_to_message and m.reply_to_message.from_user.id == BOT_INFO.id
+    
     try: bot.send_chat_action(m.chat.id, 'typing')
     except: pass
     ai_cooldowns[uid] = cur_time  
@@ -241,9 +245,19 @@ def reply_with_ai(m):
 
     def run_reply():
         try:
-            reply_text = ask_ai(prompt_content)
+            # Nếu bị tag hoặc reply trực tiếp, áp hệ thống lệnh ép AI chửi trực diện cực gắt
+            if is_tagged or is_reply_to_bot:
+                sys_p = (
+                    "Bạn bị người này gọi hồn hoặc tag thẳng mặt. Hãy dùng những từ ngữ độc địa, "
+                    "khinh bỉ và châm biếm nặng nề nhất để hạ bệ, sỉ nhục đứa vừa tag bạn. "
+                    "BẮT BUỘC dùng icon nhục mạ như 😏, 🤡, 🐸, 🧠. Trả lời cực ngắn dưới 15 từ."
+                )
+                reply_text = ask_ai(prompt_content, custom_sys=sys_p)
+            else:
+                reply_text = ask_ai(prompt_content)
+                
             final_msg = f"{html.escape(reply_text)}"
-            delay_delete(m.chat.id, bot.reply_to(m, final_msg, parse_mode="HTML").message_id)
+            bot.reply_to(m, final_msg, parse_mode="HTML") # Đổi sang reply trực tiếp đứa vừa tag
         except: pass
 
     Thread(target=run_reply, daemon=True).start()
