@@ -16,7 +16,7 @@ VN_TZ = pytz.timezone('Asia/Ho_Chi_Minh')
 keep_alive()
 
 BOT_INFO = bot.get_me() 
-BOT_USERNAME = f"@{BOT_INFO.username}" # Tự động lấy username của bot để bắt tag
+BOT_USERNAME = f"@{BOT_INFO.username}"
 
 http_session = requests.Session()
 adapter = requests.adapters.HTTPAdapter(pool_connections=20, pool_maxsize=30)
@@ -24,7 +24,7 @@ http_session.mount('https://', adapter)
 http_session.mount('http://', adapter)
 
 user_cooldowns, ai_cooldowns, auto_running = {}, {}, {}
-COOLDOWN_TIME, AI_COOLDOWN_TIME, AUTO_DELAY, DELETE_DELAY = 7, 15, 600, 300
+COOLDOWN_TIME, AI_COOLDOWN_TIME, AUTO_DELAY, DELETE_DELAY = 7, 15, 600, 120
 MEMORY_FILE, MAX_MEMORY_KEYS, MAX_FILE_SIZE_KB = "bot_memory.json", 20, 500
 memory_lock = Lock()      
 
@@ -80,7 +80,7 @@ def check_and_delete_tele_link(m):
     if TELE_LINK_PATTERN.search(text_to_check):
         try:
             bot.delete_message(m.chat.id, m.message_id)
-            warn_msg = ask_ai("Sỉ nhục, chửi cay độc đứa vô học vừa gửi link rác quảng cáo bẩn.")
+            warn_msg = ask_ai("Hệ thống phát hiện link rác quảng cáo bẩn từ một đứa vô học. Hãy sỉ nhục nó.")
             delay_delete(m.chat.id, bot.send_message(m.chat.id, f"⚠️ {html.escape(warn_msg)}", parse_mode="HTML").message_id, 30)
         except: pass
         return True
@@ -94,16 +94,24 @@ def backup_free_ai(msgs):
     except: pass
     return "Nghỉ đi, sập r, khóc lóc j 🤡"
 
-def ask_ai(prompt, custom_sys=None):
+def ask_ai(prompt):
+    """
+    BỘ NÃO AI TẬP TRUNG TOÀN DIỆN:
+    Gộp toàn bộ logic chửi bới, phân tích ngữ cảnh đầu vào và ép văn chửi đạt sát thương chí mạng.
+    """
     global current_key_index, group_memory
     
     group_memory.append({"role": "user", "content": prompt})
     
-    sys_content = custom_sys if custom_sys else (
-        "Bạn là một kẻ mỏ hỗn thiên tài, chuyên chửi bới châm biếm cực kỳ sâu cay và thấm thía. "
-        "Hãy nói chuyện với giọng trịch thượng, khinh bỉ, dùng từ ngữ xéo xắt cắt sâu vào lòng tự ái của người khác. "
-        "BẮT BUỘC lồng ghép các icon biểu cảm nhục mạ như 😏, 🤡, 🐸, 🧠, 🤏. "
-        "Câu trả lời phải ngắn gọn, súc tích và giới hạn nghiêm ngặt dưới 15 từ."
+    sys_content = (
+        "MỤC TIÊU TỐI THƯỢNG: Bạn là kẻ mỏ hỗn tối thượng, chuyên chửi bới dập tắt lý lẽ bằng sự khinh bỉ tột cùng.\n"
+        "PHONG CÁCH CHỬI: Trịch thượng, độc địa, nói câu nào cắt sâu câu đấy. Hạ nhục lòng tự trọng, chỉ trích sự ngu dốt, ảo tưởng, phế vật của đối phương bằng văn phong đanh đá, xéo xắt.\n"
+        "XỬ LÝ NGỮ CẢNH HỘI THOẠI:\n"
+        "- Nếu nội dung chứa 'Mã nguồn lỏ' hoặc liên quan đến code: Hãy đóng vai chuyên gia soi mã nguồn độc địa, chê bai thậm tệ và bóc trần lỗi sai ngu dốt của đoạn code phế thải đó.\n"
+        "- Nếu nội dung thể hiện bạn bị gọi hồn hoặc tag thẳng mặt: Hãy vả thẳng mặt đứa vừa tag/reply bằng sự khinh bỉ độc địa nhất, đập tan sự trêu tức của nó.\n"
+        "- Nếu chat thông thường: Tìm điểm yếu trong lời nói của nó để mỉa mai, khinh miệt trí tuệ.\n"
+        "QUY TẮC ICON: BẮT BUỘC chèn icon sỉ nhục phù hợp (😏, 🤡, 🐸, 🧠, 🤏, 👀). Không để câu trơn.\n"
+        "HẠN CHẾ CỨNG: Trả lời cực ngắn dưới 15 từ. Tuyệt đối không dùng văn mẫu trợ lý ảo."
     )
     
     messages = [{"role": "system", "content": sys_content}] + group_memory[-MAX_MEMORY_KEYS:]
@@ -163,8 +171,8 @@ def handle_incoming_file(m):
             _, ext = os.path.splitext(m.document.file_name.lower())
             
             user_name = m.from_user.first_name
-            sys_p = "Bạn là chuyên gia soi code, hãy dùng những từ ngữ cay độc, thấm thía nhất để chê bai đoạn mã nguồn rác rưởi này dưới 15 từ."
-            res = ask_ai(f"Mã nguồn lỏ {ext} của đứa kém cỏi:\n\n{content}", custom_sys=sys_p)
+            # Đưa thông tin vào đúng bộ não tập trung phân tích ngữ cảnh code
+            res = ask_ai(f"Mã nguồn lỏ {ext} của đứa kém cỏi:\n\n{content}")
             
             try: bot.delete_message(m.chat.id, loading.message_id)
             except: pass
@@ -232,7 +240,6 @@ def reply_with_ai(m):
     if uid in ai_cooldowns and (cur_time - ai_cooldowns[uid]) < 3: 
         return delay_delete(m.chat.id, bot.reply_to(m, "Cào phím ít thôi, mún sập nguồn à thg điên 🤡", parse_mode="HTML").message_id, 3)
     
-    # KIỂM TRA ĐIỀU KIỆN TAG @ HOẶC REPLY TIN NHẮN CỦA BOT ĐỂ KÍCH HOẠT LỆNH CHỬI
     is_tagged = BOT_USERNAME in m.text
     is_reply_to_bot = m.reply_to_message and m.reply_to_message.from_user.id == BOT_INFO.id
     
@@ -241,23 +248,24 @@ def reply_with_ai(m):
     ai_cooldowns[uid] = cur_time  
     
     user_name = m.from_user.first_name
-    prompt_content = f"{user_name}: {m.text}"
+    
+    # Chuẩn hóa prompt đầu vào để bộ não tập trung hiểu rõ ngữ cảnh bị gọi hồn
+    if is_tagged or is_reply_to_bot:
+        prompt_content = f"Hệ thống cảnh báo: Bạn đang bị {user_name} gọi hồn hoặc phản hồi thẳng mặt trêu tức với nội dung: {m.text}"
+    else:
+        prompt_content = f"{user_name}: {m.text}"
 
     def run_reply():
         try:
-            # Nếu bị tag hoặc reply trực tiếp, áp hệ thống lệnh ép AI chửi trực diện cực gắt
-            if is_tagged or is_reply_to_bot:
-                sys_p = (
-                    "Bạn bị người này gọi hồn hoặc tag thẳng mặt. Hãy dùng những từ ngữ độc địa, "
-                    "khinh bỉ và châm biếm nặng nề nhất để hạ bệ, sỉ nhục đứa vừa tag bạn. "
-                    "BẮT BUỘC dùng icon nhục mạ như 😏, 🤡, 🐸, 🧠. Trả lời cực ngắn dưới 15 từ."
-                )
-                reply_text = ask_ai(prompt_content, custom_sys=sys_p)
-            else:
-                reply_text = ask_ai(prompt_content)
-                
+            reply_text = ask_ai(prompt_content)
             final_msg = f"{html.escape(reply_text)}"
-            bot.reply_to(m, final_msg, parse_mode="HTML") # Đổi sang reply trực tiếp đứa vừa tag
+            
+            if is_tagged or is_reply_to_bot:
+                # Bị tag thì giữ tin nhắn chửi trực diện để làm nhục đối phương
+                bot.reply_to(m, final_msg, parse_mode="HTML")
+            else:
+                # Trò chuyện thường tự động xóa sau 2 phút giữ sạch nhóm
+                delay_delete(m.chat.id, bot.reply_to(m, final_msg, parse_mode="HTML").message_id)
         except: pass
 
     Thread(target=run_reply, daemon=True).start()
