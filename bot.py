@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-import sys, io, time, os, json, requests, telebot, pytz, random, re, html
+import sys, io, time, urllib.parse, os, json, requests, telebot, pytz, random, re, html
 from threading import Thread, Lock
 from datetime import datetime
 from keep_alive import keep_alive
@@ -171,7 +171,7 @@ def handle_incoming_file(m):
     def process_file():
         try:
             content = bot.download_file(bot.get_file(m.document.file_id).file_path).decode('utf-8', errors='ignore')
-            if not content.strip(): return bot.edit_message_text("File rỗng như cái nano thiếu nếp nhăn của m vậy", m.chat.id, loading.message_id, parse_mode="HTML")
+            if not content.strip(): return bot.edit_message_text("File rỗng như cái não thiếu nếp nhăn của m vậy", m.chat.id, loading.message_id, parse_mode="HTML")
             _, ext = os.path.splitext(m.document.file_name.lower())
             
             user_name = m.from_user.first_name
@@ -189,7 +189,7 @@ def handle_incoming_file(m):
 def start(m):
     if not is_allowed_chat(m): return
     if check_and_delete_tele_link(m): return
-    text = "<b>Hệ thống hoạt động</b>\n/up video : Gửi chữ video lặp lại.\n/stop : Dừng gửi."
+    text = "<b>Hệ thống hoạt động</b>\n/up video [link] : Tự động lấy video và buff tim ngầm.\n/stop : Dừng tiến trình."
     delay_delete(m.chat.id, bot.reply_to(m, text, parse_mode="HTML").message_id)
 
 @bot.message_handler(commands=['up'])
@@ -197,17 +197,19 @@ def up_video(m):
     if not is_allowed_chat(m): return
     if check_and_delete_tele_link(m): return
     
-    text_args = m.text.strip().split()
-    if len(text_args) < 2 or text_args[1].lower() != "video":
-        return delay_delete(m.chat.id, bot.reply_to(m, "Sai cú pháp. Sử dụng: /up video", parse_mode="HTML").message_id, 5)
+    # Tách chuỗi lệnh chính xác
+    parts = m.text.strip().split(maxsplit=2)
+    if len(parts) < 3 or parts[1].lower() != "video":
+        return delay_delete(m.chat.id, bot.reply_to(m, "Sai cú pháp. Sử dụng: /up video [link_tiktok]", parse_mode="HTML").message_id, 5)
 
+    target_url = parts[2].strip()
     uid = m.from_user.id
     if auto_running.get(uid, False): 
-        return delay_delete(m.chat.id, bot.reply_to(m, "Tiến trình đang chạy rồi.", parse_mode="HTML").message_id, 5)
+        return delay_delete(m.chat.id, bot.reply_to(m, "Tiến trình trước đó hiện đang hoạt động.", parse_mode="HTML").message_id, 5)
 
     auto_running[uid] = True
-    delay_delete(m.chat.id, bot.reply_to(m, "Bắt đầu!", parse_mode="HTML").message_id, 5)
-    Thread(target=auto_worker, args=(uid, m.chat.id), daemon=True).start()
+    delay_delete(m.chat.id, bot.reply_to(m, "Đã ghi nhận! Đang phân tích video và chạy API tim...", parse_mode="HTML").message_id, 5)
+    Thread(target=auto_worker, args=(uid, target_url, m.chat.id), daemon=True).start()
 
 @bot.message_handler(commands=['stop'])
 def stop(m):
@@ -219,7 +221,7 @@ def stop(m):
     uid = m.from_user.id
     if auto_running.get(uid, False):
         auto_running[uid] = False
-        delay_delete(m.chat.id, bot.reply_to(m, "Đã dừng tiến trình.", parse_mode="HTML").message_id, 5)
+        delay_delete(m.chat.id, bot.reply_to(m, "Đã dừng chạy luồng buff tim.", parse_mode="HTML").message_id, 5)
     else:
         delay_delete(m.chat.id, bot.reply_to(m, "Không có tiến trình nào đang chạy.", parse_mode="HTML").message_id, 5)
 
@@ -264,13 +266,47 @@ def welcome_new_member(m):
         for u in m.new_chat_members: 
             delay_delete(m.chat.id, bot.send_message(m.chat.id, f"Lại thêm một thg lỏ <b>{html.escape(u.first_name)}</b> vào làm tốn dung lượng nhóm", parse_mode="HTML").message_id, 60)
 
-# THAY ĐỔI: Chỉ gửi duy nhất chữ "video" lên nhóm theo chu kỳ đặt sẵn
-def auto_worker(uid, chat_id):
+# LUỒNG CHẠY TỰ ĐỘNG: Gói gọn bóc tách link gốc và tự động gọi API tim định kỳ
+def auto_worker(uid, raw_tiktok_url, chat_id):
     while auto_running.get(uid, False):
-        bot.send_message(chat_id, "video")
+        # 1. Trích xuất link sạch (không dính watermark) từ TikWM làm tham số
+        clean_url = extract_clean_video_link(raw_tiktok_url)
+        
+        if clean_url:
+            # 2. Đưa link sạch vào API tim.php của bạn
+            api_status = call_heart_buff_api(clean_url)
+            bot.send_message(chat_id, api_status, parse_mode="HTML")
+        else:
+            bot.send_message(chat_id, "❌ Không bóc tách được link video gốc từ nguồn này.")
+            
         for _ in range(AUTO_DELAY):
             if not auto_running.get(uid, False): return
             time.sleep(1)
+
+def extract_clean_video_link(tiktok_url):
+    try:
+        api_url = f"https://api.tikwm.com/api/?url={urllib.parse.quote(tiktok_url)}"
+        res = http_session.get(api_url, timeout=12).json()
+        if res.get("code") == 0 and "data" in res:
+            # Lấy URL trực tiếp của tệp video (.mp4)
+            return res["data"].get("play")
+    except: pass
+    return None
+
+def call_heart_buff_api(video_target_url):
+    try:
+        # Mã hóa URL video gốc để nối vào sau tham số url=
+        encoded_param = urllib.parse.quote(video_target_url)
+        target_endpoint = f"http://abcdxyz310107.x10.mx/tim.php?url={encoded_param}"
+        
+        res = http_session.get(target_endpoint, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+        t = datetime.now(VN_TZ).strftime("%H:%M - %d/%m")
+        
+        if res.status_code == 200:
+            return f"⚡ <b>[BUFF HEART SUCCESS]</b>\nTrạng thái: Gửi request thành công\nThời gian: {t}"
+        return f"❌ API lỗi phản hồi mã: {res.status_code}"
+    except:
+        return "❌ Thất bại: Không thể kết nối đến máy chủ API tim.php"
 
 if __name__ == "__main__":
     print("Bot mỏ hỗn chửi thấm đã lên sàn...")
