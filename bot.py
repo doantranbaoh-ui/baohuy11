@@ -171,7 +171,7 @@ def handle_incoming_file(m):
     def process_file():
         try:
             content = bot.download_file(bot.get_file(m.document.file_id).file_path).decode('utf-8', errors='ignore')
-            if not content.strip(): return bot.edit_message_text("File rỗng như cái não thiếu nếp nhăn của m vậy", m.chat.id, loading.message_id, parse_mode="HTML")
+            if not content.strip(): return bot.edit_message_text("File rỗng như cái nano thiếu nếp nhăn của m vậy", m.chat.id, loading.message_id, parse_mode="HTML")
             _, ext = os.path.splitext(m.document.file_name.lower())
             
             user_name = m.from_user.first_name
@@ -189,10 +189,9 @@ def handle_incoming_file(m):
 def start(m):
     if not is_allowed_chat(m): return
     if check_and_delete_tele_link(m): return
-    text = "<b>Hệ thống hoạt động</b>\n/up video : Kích hoạt trạng thái uptime.\n/stop : Dừng tiến trình."
+    text = "<b>Hệ thống hoạt động</b>\n/up video : Gửi chữ video lặp lại.\n/stop : Dừng gửi."
     delay_delete(m.chat.id, bot.reply_to(m, text, parse_mode="HTML").message_id)
 
-# THAY ĐỔI: Lệnh up video chạy thuần túy, không nhận link đầu vào
 @bot.message_handler(commands=['up'])
 def up_video(m):
     if not is_allowed_chat(m): return
@@ -204,10 +203,10 @@ def up_video(m):
 
     uid = m.from_user.id
     if auto_running.get(uid, False): 
-        return delay_delete(m.chat.id, bot.reply_to(m, "Trạng thái uptime video hiện đang hoạt động rồi.", parse_mode="HTML").message_id, 5)
+        return delay_delete(m.chat.id, bot.reply_to(m, "Tiến trình đang chạy rồi.", parse_mode="HTML").message_id, 5)
 
     auto_running[uid] = True
-    delay_delete(m.chat.id, bot.reply_to(m, "Đã kích hoạt trạng thái video thành công!", parse_mode="HTML").message_id, 5)
+    delay_delete(m.chat.id, bot.reply_to(m, "Bắt đầu!", parse_mode="HTML").message_id, 5)
     Thread(target=auto_worker, args=(uid, m.chat.id), daemon=True).start()
 
 @bot.message_handler(commands=['stop'])
@@ -220,9 +219,9 @@ def stop(m):
     uid = m.from_user.id
     if auto_running.get(uid, False):
         auto_running[uid] = False
-        delay_delete(m.chat.id, bot.reply_to(m, "Đã tắt trạng thái uptime video", parse_mode="HTML").message_id, 5)
+        delay_delete(m.chat.id, bot.reply_to(m, "Đã dừng tiến trình.", parse_mode="HTML").message_id, 5)
     else:
-        delay_delete(m.chat.id, bot.reply_to(m, "Không có tiến trình nào đang hoạt động", parse_mode="HTML").message_id, 5)
+        delay_delete(m.chat.id, bot.reply_to(m, "Không có tiến trình nào đang chạy.", parse_mode="HTML").message_id, 5)
 
 @bot.message_handler(func=lambda m: m.chat.id == ALLOWED_GROUP_ID and m.text)
 def reply_with_ai(m):
@@ -265,12 +264,10 @@ def welcome_new_member(m):
         for u in m.new_chat_members: 
             delay_delete(m.chat.id, bot.send_message(m.chat.id, f"Lại thêm một thg lỏ <b>{html.escape(u.first_name)}</b> vào làm tốn dung lượng nhóm", parse_mode="HTML").message_id, 60)
 
-# Chạy lặp thông báo uptime hệ thống theo chu kỳ (mỗi 10 phút)
+# THAY ĐỔI: Chỉ gửi duy nhất chữ "video" lên nhóm theo chu kỳ đặt sẵn
 def auto_worker(uid, chat_id):
     while auto_running.get(uid, False):
-        t = datetime.now(VN_TZ).strftime("%H:%M - %d/%m")
-        output = f"⚡ <b>[UPTIME VIDEO RUNNING]</b>\n\nTrạng thái: Active\nThời gian cập nhật: {t}"
-        bot.send_message(chat_id, output, parse_mode="HTML")
+        bot.send_message(chat_id, "video")
         for _ in range(AUTO_DELAY):
             if not auto_running.get(uid, False): return
             time.sleep(1)
