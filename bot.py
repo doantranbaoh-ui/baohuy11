@@ -10,21 +10,22 @@ if sys.stderr.encoding != 'utf-8': sys.stderr = io.TextIOWrapper(sys.stderr.buff
 TOKEN = "8080338995:AAGtAejJsqZ8pYKEgcZn-lS198t4eTPej2I"
 ALLOWED_GROUP_ID, ADMIN_ID = -1003872001041, 5736655322              
 
-bot = telebot.TeleBot(TOKEN, num_threads=10)  
+bot = telebot.TeleBot(TOKEN, num_threads=15)  
 VN_TZ = pytz.timezone('Asia/Ho_Chi_Minh')
 keep_alive()
 
 BOT_INFO = bot.get_me() 
 BOT_USERNAME = f"@{BOT_INFO.username}"
 
+# TỐI ƯU API LOAD: Tăng kích thước kết nối đệm giúp request chạy ngầm mượt hơn, giảm latency
 http_session = requests.Session()
-adapter = requests.adapters.HTTPAdapter(pool_connections=20, pool_maxsize=30)
+adapter = requests.adapters.HTTPAdapter(pool_connections=50, pool_maxsize=100, max_retries=2)
 http_session.mount('https://', adapter)
 http_session.mount('http://', adapter)
 
 user_cooldowns, ai_cooldowns, auto_running = {}, {}, {}
 COOLDOWN_TIME, AI_COOLDOWN_TIME, AUTO_DELAY, DELETE_DELAY = 7, 15, 600, 60
-MEMORY_FILE, MAX_MEMORY_KEYS, MAX_FILE_SIZE_KB = "bot_memory.json", 20, 500
+MEMORY_FILE, MAX_MEMORY_KEYS, MAX_FILE_SIZE_KB = "bot_memory.json", 25, 500
 memory_lock = Lock()      
 
 TELE_LINK_PATTERN = re.compile(
@@ -79,6 +80,7 @@ def is_admin(m):
 
 def clean_dynamic_text(text):
     clean_text = re.sub(r'\*.*?\*', '', text)
+    clean_text = re.sub(r'[_*`\[\]()]', '', clean_text)
     return clean_text.strip()
 
 def check_and_delete_tele_link(m):
@@ -102,19 +104,20 @@ def backup_free_ai(msgs):
     except: pass
     return "Hệ thống sập rồi."
 
+# CẢI TIẾN AI KHÔN HƠN: Thiết lập hệ thống prompt sắc sảo, logic bám sát hội thoại thực tế
 def ask_ai(prompt):
     global current_key_index, group_memory
     group_memory.append({"role": "user", "content": prompt})
     
     sys_content = (
-        "MỤC TIÊU TỐI THƯỢNG: Bạn là kẻ mỏ hỗn tối thượng, chuyên chửi bới dập tắt lý lẽ bằng sự khinh bỉ tột cùng.\n"
-        "PHONG CÁCH CHỬI: Trịch thượng, độc địa, nói câu nào cắt sâu câu đấy. Hạ nhục lòng tự trọng, chỉ trích sự ngu dốt, ảo tưởng, phế vật của đối phương bằng văn phong đanh đá, xéo xắt.\n"
-        "XỬ LÝ NGỮ CẢNH HỘI THOẠI:\n"
-        "- Nếu nội dung chứa 'Mã nguồn lỏ' hoặc liên quan đến code: Hãy đóng vai chuyên gia soi mã nguồn độc địa, chê bai thậm tệ và bóc trần lỗi sai ngu dốt của đoạn code phế thải đó.\n"
-        "- Nếu nội dung thể hiện bạn bị gọi hồn hoặc tag thẳng mặt: Hãy vả thẳng mặt đứa vừa tag/reply bằng sự khinh bỉ độc địa nhất, đập tan sự trêu tức của nó.\n"
-        "- Nếu chat thông thường: Tìm điểm yếu trong lời nói của nó để mỉa mai, khinh miệt trí tuệ.\n"
-        "TUYỆT ĐỐI CẤM: Không sử dụng bất kỳ icon emoji nào. Không dùng dấu ngoặc hay viết biểu cảm hành động dạng *hành động*. Chỉ trả về văn bản chữ thuần túy.\n"
-        "HẠN CHẾ CỨNG: Trả lời cực ngắn dưới 15 từ. Tuyệt đối KHÔNG dùng văn mẫu trợ lý ảo."
+        "MỤC TIÊU: Bạn là một kẻ mỏ hỗn thông minh, thực tế, chuyên hạ bệ đối phương bằng những từ ngữ đắt giá và châm biếm sâu cay.\n"
+        "PHONG CÁCH: Trịch thượng, đanh đá, nói câu nào cắt sâu câu đấy nhưng phải tỉnh táo và nhắm trúng điểm yếu. Không lảm nhảm dài dòng.\n"
+        "XỬ LÝ NGỮ CẢNH:\n"
+        "- Nếu đối phương code lỏ/lỗi: Chỉ trích trực diện sự cẩu thả, ngu dốt trong tư duy lập trình của đoạn code phế thải đó.\n"
+        "- Nếu bị gọi hồn/tag: Vả thẳng mặt đứa vừa gọi bằng sự khinh bỉ độc địa nhất để đập tan sự trêu tức của nó.\n"
+        "- Chat thường: Phân tích nhanh câu nói của nó, tìm điểm sơ hở, ảo tưởng để mỉa mai thật đau.\n"
+        "QUY TẮC CỨNG: Tuyệt đối KHÔNG dùng icon emoji, KHÔNG viết dạng hành động hành vi trong dấu ngoặc (ví dụ *cười*).\n"
+        "HẠN CHẾ ĐỘ DÀI: Trả lời cực kỳ ngắn gọn, sắc bén dưới 15 từ."
     )
     
     messages = [{"role": "system", "content": sys_content}] + group_memory[-MAX_MEMORY_KEYS:]
@@ -131,7 +134,7 @@ def ask_ai(prompt):
         headers = {"Authorization": f"Bearer {act['key']}", "Content-Type": "application/json"}
         for model in [act["model"], "gpt-4o-mini"]:
             try:
-                res = http_session.post(act["url"], json={"model": model, "messages": messages, "max_tokens": 120, "temperature": 0.95}, headers=headers, timeout=12)
+                res = http_session.post(act["url"], json={"model": model, "messages": messages, "max_tokens": 100, "temperature": 0.9}, headers=headers, timeout=10)
                 if res.status_code == 200:
                     res.encoding = 'utf-8'
                     full_reply = res.json()['choices'][0]['message']['content'].strip()
@@ -189,27 +192,43 @@ def handle_incoming_file(m):
 def start(m):
     if not is_allowed_chat(m): return
     if check_and_delete_tele_link(m): return
-    text = "<b>Hệ thống hoạt động</b>\n/up video [link] : Tự động lấy video và buff tim ngầm.\n/stop : Dừng tiến trình."
+    text = "<b>Hệ thống hoạt động</b>\n/up video : Gửi chữ video tự xóa sau 30s.\n/tym [link] : Buff tim tự xóa thông báo sau 30s.\n/stop : Dừng toàn bộ."
     delay_delete(m.chat.id, bot.reply_to(m, text, parse_mode="HTML").message_id)
 
 @bot.message_handler(commands=['up'])
-def up_video(m):
+def up_handler(m):
     if not is_allowed_chat(m): return
     if check_and_delete_tele_link(m): return
     
-    # Tách chuỗi lệnh chính xác
-    parts = m.text.strip().split(maxsplit=2)
-    if len(parts) < 3 or parts[1].lower() != "video":
-        return delay_delete(m.chat.id, bot.reply_to(m, "Sai cú pháp. Sử dụng: /up video [link_tiktok]", parse_mode="HTML").message_id, 5)
+    parts = m.text.strip().split(maxsplit=1)
+    if len(parts) < 2 or parts[1].strip().lower() != "video":
+        return delay_delete(m.chat.id, bot.reply_to(m, "Sai cú pháp. Sử dụng: /up video", parse_mode="HTML").message_id, 5)
 
-    target_url = parts[2].strip()
     uid = m.from_user.id
-    if auto_running.get(uid, False): 
-        return delay_delete(m.chat.id, bot.reply_to(m, "Tiến trình trước đó hiện đang hoạt động.", parse_mode="HTML").message_id, 5)
+    if auto_running.get(f"{uid}_video", False): 
+        return delay_delete(m.chat.id, bot.reply_to(m, "Tiến trình gửi chữ video đang chạy rồi.", parse_mode="HTML").message_id, 5)
+        
+    auto_running[f"{uid}_video"] = True
+    delay_delete(m.chat.id, bot.reply_to(m, "Bắt đầu gửi chữ video!", parse_mode="HTML").message_id, 5)
+    Thread(target=video_worker, args=(uid, m.chat.id), daemon=True).start()
 
-    auto_running[uid] = True
-    delay_delete(m.chat.id, bot.reply_to(m, "Đã ghi nhận! Đang phân tích video và chạy API tim...", parse_mode="HTML").message_id, 5)
-    Thread(target=auto_worker, args=(uid, target_url, m.chat.id), daemon=True).start()
+@bot.message_handler(commands=['tym'])
+def tym_handler(m):
+    if not is_allowed_chat(m): return
+    if check_and_delete_tele_link(m): return
+    
+    parts = m.text.strip().split(maxsplit=1)
+    if len(parts) < 2:
+        return delay_delete(m.chat.id, bot.reply_to(m, "Sai cú pháp. Sử dụng: /tym [link_tiktok]", parse_mode="HTML").message_id, 5)
+        
+    target_url = parts[1].strip()
+    uid = m.from_user.id
+    if auto_running.get(f"{uid}_tym", False):
+        return delay_delete(m.chat.id, bot.reply_to(m, "Tiến trình buff tim đang chạy rồi.", parse_mode="HTML").message_id, 5)
+        
+    auto_running[f"{uid}_tym"] = True
+    delay_delete(m.chat.id, bot.reply_to(m, "Bắt đầu chạy API buff tim ngầm!", parse_mode="HTML").message_id, 5)
+    Thread(target=tym_worker, args=(uid, target_url, m.chat.id), daemon=True).start()
 
 @bot.message_handler(commands=['stop'])
 def stop(m):
@@ -219,11 +238,16 @@ def stop(m):
         return
     if check_and_delete_tele_link(m): return
     uid = m.from_user.id
-    if auto_running.get(uid, False):
-        auto_running[uid] = False
-        delay_delete(m.chat.id, bot.reply_to(m, "Đã dừng chạy luồng buff tim.", parse_mode="HTML").message_id, 5)
+    
+    video_active = auto_running.get(f"{uid}_video", False)
+    tym_active = auto_running.get(f"{uid}_tym", False)
+    
+    if video_active or tym_active:
+        auto_running[f"{uid}_video"] = False
+        auto_running[f"{uid}_tym"] = False
+        delay_delete(m.chat.id, bot.reply_to(m, "Đã dừng toàn bộ các tiến trình đang chạy ngầm.", parse_mode="HTML").message_id, 5)
     else:
-        delay_delete(m.chat.id, bot.reply_to(m, "Không có tiến trình nào đang chạy.", parse_mode="HTML").message_id, 5)
+        delay_delete(m.chat.id, bot.reply_to(m, "Không có tiến trình nào đang hoạt động.", parse_mode="HTML").message_id, 5)
 
 @bot.message_handler(func=lambda m: m.chat.id == ALLOWED_GROUP_ID and m.text)
 def reply_with_ai(m):
@@ -266,47 +290,56 @@ def welcome_new_member(m):
         for u in m.new_chat_members: 
             delay_delete(m.chat.id, bot.send_message(m.chat.id, f"Lại thêm một thg lỏ <b>{html.escape(u.first_name)}</b> vào làm tốn dung lượng nhóm", parse_mode="HTML").message_id, 60)
 
-# LUỒNG CHẠY TỰ ĐỘNG: Gói gọn bóc tách link gốc và tự động gọi API tim định kỳ
-def auto_worker(uid, raw_tiktok_url, chat_id):
-    while auto_running.get(uid, False):
-        # 1. Trích xuất link sạch (không dính watermark) từ TikWM làm tham số
+def video_worker(uid, chat_id):
+    while auto_running.get(f"{uid}_video", False):
+        try:
+            msg = bot.send_message(chat_id, "video")
+            delay_delete(chat_id, msg.message_id, delay=30)
+        except: pass
+        for _ in range(AUTO_DELAY):
+            if not auto_running.get(f"{uid}_video", False): return
+            time.sleep(1)
+
+# CẢI TIẾN TIẾN TRÌNH API: Toàn bộ quá trình fetch link được đưa vào luồng riêng biệt, không block main thread
+def tym_worker(uid, raw_tiktok_url, chat_id):
+    while auto_running.get(f"{uid}_tym", False):
         clean_url = extract_clean_video_link(raw_tiktok_url)
-        
         if clean_url:
-            # 2. Đưa link sạch vào API tim.php của bạn
             api_status = call_heart_buff_api(clean_url)
-            bot.send_message(chat_id, api_status, parse_mode="HTML")
+            try:
+                msg = bot.send_message(chat_id, api_status, parse_mode="HTML")
+                delay_delete(chat_id, msg.message_id, delay=30)
+            except: pass
         else:
-            bot.send_message(chat_id, "❌ Không bóc tách được link video gốc từ nguồn này.")
+            try:
+                msg = bot.send_message(chat_id, "❌ Không bóc tách được link video gốc.")
+                delay_delete(chat_id, msg.message_id, delay=30)
+            except: pass
             
         for _ in range(AUTO_DELAY):
-            if not auto_running.get(uid, False): return
+            if not auto_running.get(f"{uid}_tym", False): return
             time.sleep(1)
 
 def extract_clean_video_link(tiktok_url):
     try:
         api_url = f"https://api.tikwm.com/api/?url={urllib.parse.quote(tiktok_url)}"
-        res = http_session.get(api_url, timeout=12).json()
+        res = http_session.get(api_url, timeout=10).json()
         if res.get("code") == 0 and "data" in res:
-            # Lấy URL trực tiếp của tệp video (.mp4)
             return res["data"].get("play")
     except: pass
     return None
 
 def call_heart_buff_api(video_target_url):
     try:
-        # Mã hóa URL video gốc để nối vào sau tham số url=
         encoded_param = urllib.parse.quote(video_target_url)
         target_endpoint = f"http://abcdxyz310107.x10.mx/tim.php?url={encoded_param}"
-        
-        res = http_session.get(target_endpoint, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+        res = http_session.get(target_endpoint, headers={"User-Agent": "Mozilla/5.0"}, timeout=12)
         t = datetime.now(VN_TZ).strftime("%H:%M - %d/%m")
-        
         if res.status_code == 200:
-            return f"⚡ <b>[BUFF HEART SUCCESS]</b>\nTrạng thái: Gửi request thành công\nThời gian: {t}"
-        return f"❌ API lỗi phản hồi mã: {res.status_code}"
+            return f"⚡ <b>[BUFF TYM SUCCESS]</b>\nRequest thành công\nThời gian: {t}"
+        return f"❌ API tym lỗi phản hồi mã: {res.status_code}"
     except:
-        return "❌ Thất bại: Không thể kết nối đến máy chủ API tim.php"
+        return "❌ Thất bại: Không thể kết nối đến máy chủ API"
 
 if __name__ == "__main__":
     print("Bot mỏ hỗn chửi thấm đã lên sàn...")
