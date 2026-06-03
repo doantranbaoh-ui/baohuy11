@@ -17,7 +17,6 @@ keep_alive()
 BOT_INFO = bot.get_me() 
 BOT_USERNAME = f"@{BOT_INFO.username}"
 
-# TỐI ƯU API LOAD: Tăng kích thước kết nối đệm giúp request chạy ngầm mượt hơn, giảm latency
 http_session = requests.Session()
 adapter = requests.adapters.HTTPAdapter(pool_connections=50, pool_maxsize=100, max_retries=2)
 http_session.mount('https://', adapter)
@@ -27,6 +26,9 @@ user_cooldowns, ai_cooldowns, auto_running = {}, {}, {}
 COOLDOWN_TIME, AI_COOLDOWN_TIME, AUTO_DELAY, DELETE_DELAY = 7, 15, 600, 60
 MEMORY_FILE, MAX_MEMORY_KEYS, MAX_FILE_SIZE_KB = "bot_memory.json", 25, 500
 memory_lock = Lock()      
+
+# Regex nhận diện chính xác mọi loại link TikTok (gồm cả vt.tiktok, vm.tiktok, www.tiktok)
+TIKTOK_LINK_PATTERN = re.compile(r'https?://(?:vm|vt|www)\.tiktok\.com/\S+', re.IGNORECASE)
 
 TELE_LINK_PATTERN = re.compile(
     r'(https?://)?(www\.)?(t\.me|telegram\.me|telegram\.org|tg\.me)/[a-zA-Z0-9_]{5,}'
@@ -104,7 +106,6 @@ def backup_free_ai(msgs):
     except: pass
     return "Hệ thống sập rồi."
 
-# CẢI TIẾN AI KHÔN HƠN: Thiết lập hệ thống prompt sắc sảo, logic bám sát hội thoại thực tế
 def ask_ai(prompt):
     global current_key_index, group_memory
     group_memory.append({"role": "user", "content": prompt})
@@ -116,7 +117,7 @@ def ask_ai(prompt):
         "- Nếu đối phương code lỏ/lỗi: Chỉ trích trực diện sự cẩu thả, ngu dốt trong tư duy lập trình của đoạn code phế thải đó.\n"
         "- Nếu bị gọi hồn/tag: Vả thẳng mặt đứa vừa gọi bằng sự khinh bỉ độc địa nhất để đập tan sự trêu tức của nó.\n"
         "- Chat thường: Phân tích nhanh câu nói của nó, tìm điểm sơ hở, ảo tưởng để mỉa mai thật đau.\n"
-        "QUY TẮC CỨNG: Tuyệt đối KHÔNG dùng icon emoji, KHÔNG viết dạng hành động hành vi trong dấu ngoặc (ví dụ *cười*).\n"
+        "QUY TẮC CỨNG: Tuyệt đối KHÔNG dùng icon emoji, KHÔNG viết dạng hành động hành vi trong dấu ngoặc.\n"
         "HẠN CHẾ ĐỘ DÀI: Trả lời cực kỳ ngắn gọn, sắc bén dưới 15 từ."
     )
     
@@ -192,25 +193,8 @@ def handle_incoming_file(m):
 def start(m):
     if not is_allowed_chat(m): return
     if check_and_delete_tele_link(m): return
-    text = "<b>Hệ thống hoạt động</b>\n/up video : Gửi chữ video tự xóa sau 30s.\n/tym [link] : Buff tim tự xóa thông báo sau 30s.\n/stop : Dừng toàn bộ."
+    text = "<b>Hệ thống hoạt động</b>\nChỉ cần dán link TikTok vào nhóm, bot sẽ tự download video không logo.\n/tym [link] : Chạy ngầm buff tim.\n/stop : Dừng toàn bộ luồng ngầm."
     delay_delete(m.chat.id, bot.reply_to(m, text, parse_mode="HTML").message_id)
-
-@bot.message_handler(commands=['up'])
-def up_handler(m):
-    if not is_allowed_chat(m): return
-    if check_and_delete_tele_link(m): return
-    
-    parts = m.text.strip().split(maxsplit=1)
-    if len(parts) < 2 or parts[1].strip().lower() != "video":
-        return delay_delete(m.chat.id, bot.reply_to(m, "Sai cú pháp. Sử dụng: /up video", parse_mode="HTML").message_id, 5)
-
-    uid = m.from_user.id
-    if auto_running.get(f"{uid}_video", False): 
-        return delay_delete(m.chat.id, bot.reply_to(m, "Tiến trình gửi chữ video đang chạy rồi.", parse_mode="HTML").message_id, 5)
-        
-    auto_running[f"{uid}_video"] = True
-    delay_delete(m.chat.id, bot.reply_to(m, "Bắt đầu gửi chữ video!", parse_mode="HTML").message_id, 5)
-    Thread(target=video_worker, args=(uid, m.chat.id), daemon=True).start()
 
 @bot.message_handler(commands=['tym'])
 def tym_handler(m):
@@ -239,21 +223,28 @@ def stop(m):
     if check_and_delete_tele_link(m): return
     uid = m.from_user.id
     
-    video_active = auto_running.get(f"{uid}_video", False)
     tym_active = auto_running.get(f"{uid}_tym", False)
-    
-    if video_active or tym_active:
-        auto_running[f"{uid}_video"] = False
+    if tym_active:
         auto_running[f"{uid}_tym"] = False
         delay_delete(m.chat.id, bot.reply_to(m, "Đã dừng toàn bộ các tiến trình đang chạy ngầm.", parse_mode="HTML").message_id, 5)
     else:
         delay_delete(m.chat.id, bot.reply_to(m, "Không có tiến trình nào đang hoạt động.", parse_mode="HTML").message_id, 5)
 
+# BẮT LINK TỰ ĐỘNG & CHAT AI KHÔN HƠN
 @bot.message_handler(func=lambda m: m.chat.id == ALLOWED_GROUP_ID and m.text)
-def reply_with_ai(m):
+def handle_text_messages(m):
     if check_and_delete_tele_link(m): return 
     if m.text.startswith('/'): return
     
+    # 1. KIỂM TRA XEM CÓ LINK TIKTOK TRONG TIN NHẮN KHÔNG
+    match = TIKTOK_LINK_PATTERN.search(m.text)
+    if match:
+        tiktok_url = match.group(0)
+        # Chạy tiến trình tải video bất đồng bộ (Non-blocking)
+        Thread(target=download_and_send_video, args=(tiktok_url, m.chat.id, m.message_id), daemon=True).start()
+        return  # Bắt được link video thì không kích hoạt AI chửi nữa
+
+    # 2. LUỒNG CHAT AI PHẢN HỒI THÔNG THƯỜNG
     uid, cur_time = m.from_user.id, time.time()
     if uid in ai_cooldowns and (cur_time - ai_cooldowns[uid]) < 3: 
         return delay_delete(m.chat.id, bot.reply_to(m, "Cào phím ít thôi, muốn sập nguồn à thg điên", parse_mode="HTML").message_id, 3)
@@ -290,17 +281,34 @@ def welcome_new_member(m):
         for u in m.new_chat_members: 
             delay_delete(m.chat.id, bot.send_message(m.chat.id, f"Lại thêm một thg lỏ <b>{html.escape(u.first_name)}</b> vào làm tốn dung lượng nhóm", parse_mode="HTML").message_id, 60)
 
-def video_worker(uid, chat_id):
-    while auto_running.get(f"{uid}_video", False):
-        try:
-            msg = bot.send_message(chat_id, "video")
-            delay_delete(chat_id, msg.message_id, delay=30)
-        except: pass
-        for _ in range(AUTO_DELAY):
-            if not auto_running.get(f"{uid}_video", False): return
-            time.sleep(1)
+# HÀM TỰ ĐỘNG TẢI & GỬI FILE VIDEO LÊN NHÓM (XÓA SAU 30 GIÂY)
+def download_and_send_video(raw_tiktok_url, chat_id, reply_to_id):
+    try:
+        # Bóc tách link sạch không logo
+        clean_url = extract_clean_video_link(raw_tiktok_url)
+        if clean_url:
+            # Tải tệp dữ liệu video dạng bytes
+            video_res = http_session.get(clean_url, timeout=25)
+            if video_res.status_code == 200:
+                video_bytes = io.BytesIO(video_res.content)
+                video_bytes.name = "tiktok_no_watermark.mp4"
+                
+                # Gửi trực tiếp tệp video lên nhóm dưới dạng reply tin nhắn chứa link
+                msg = bot.send_video(
+                    chat_id, 
+                    video_bytes, 
+                    reply_to_message_id=reply_to_id,
+                    caption="⚡ <b>Video của bạn đã tải xong (Xóa sau 30s)</b>",
+                    parse_mode="HTML"
+                )
+                # Tự động xóa tin nhắn video sau 30 giây
+                delay_delete(chat_id, msg.message_id, delay=30)
+        else:
+            msg = bot.send_message(chat_id, "❌ Không bóc tách được link video gốc từ TikTok này.")
+            delay_delete(chat_id, msg.message_id, delay=15)
+    except Exception as e:
+        print(f"Lỗi tải video tự động: {e}")
 
-# CẢI TIẾN TIẾN TRÌNH API: Toàn bộ quá trình fetch link được đưa vào luồng riêng biệt, không block main thread
 def tym_worker(uid, raw_tiktok_url, chat_id):
     while auto_running.get(f"{uid}_tym", False):
         clean_url = extract_clean_video_link(raw_tiktok_url)
