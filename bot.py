@@ -8,7 +8,7 @@ if sys.stdout.encoding != 'utf-8': sys.stdout = io.TextIOWrapper(sys.stdout.buff
 if sys.stderr.encoding != 'utf-8': sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
 TOKEN = "8080338995:AAGtAejJsqZ8pYKEgcZn-lS198t4eTPej2I"
-ALLOWED_GROUP_ID, ADMIN_ID = -1003872001041, 5736655322              
+ALLOWED_GROUP_ID, ADMIN_ID = -1003925717296, 5736655322              
 
 bot = telebot.TeleBot(TOKEN, num_threads=15)  
 VN_TZ = pytz.timezone('Asia/Ho_Chi_Minh')
