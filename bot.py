@@ -56,7 +56,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         
         if row:
-            await query.message.delete() # Xóa menu chữ để gửi ảnh QR kèm menu mới
+            await query.message.delete() # Xóa menu chữ cũ để gửi ảnh QR kèm menu nút mới
             await context.bot.send_photo(
                 chat_id=query.message.chat_id,
                 photo=row[0],
@@ -67,18 +67,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await query.edit_message_text("💵 Chọn mệnh giá nạp (Admin chưa cấu hình ảnh QR bằng lệnh /addqr):", reply_markup=InlineKeyboardMarkup(keyboard))
     
-    # 2. Khách hàng chọn một mệnh giá nạp cụ thể (Cải tiến chèn Timestamp thời gian gửi)
+    # 2. Khách hàng chọn mệnh giá nạp cụ thể (Giới hạn trong 20 phút)
     elif data.startswith('nap_'):
         amount = data.split('_')[1]
-        current_time = int(time.time()) # Lưu mốc giây hiện tại
+        current_time = int(time.time())
         
-        # Chèn thời gian hiện tại vào cuối callback_data của nút duyệt
         admin_keyboard = [[
             InlineKeyboardButton("✅ Duyệt", callback_data=f"approve_{user_id}_{amount}_{current_time}"),
             InlineKeyboardButton("❌ Hủy đơn", callback_data=f"deny_{user_id}")
         ]]
         
-        # Gửi thông báo trực tiếp đến tài khoản Admin
         await context.bot.send_message(
             chat_id=ADMIN_ID,
             text=f"🔔 **YÊU CẦU NẠP TIỀN (Hạn chót 20 phút)**\n- Khách hàng ID: `{user_id}`\n- Số tiền: {int(amount):,}đ\n\n*Hệ thống sẽ tự hủy quyền duyệt sau 20 phút nữa để đảm bảo an toàn!*",
@@ -86,14 +84,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode='Markdown'
         )
         
-        # Phản hồi cho người dùng tùy thuộc giao diện trước đó là ảnh hay chữ
         if query.message.photo:
             await query.message.delete()
-            await context.bot.send_message(chat_id=query.message.chat_id, text="✅ Đã gửi yêu cầu nạp tiền đến Admin.\n⚠️ Lưu ý: Yêu cầu của bạn chỉ có hiệu lực kiểm tra và duyệt trong vòng 20 phút!")
+            await context.bot.send_message(chat_id=query.message.chat_id, text="✅ Đã gửi yêu cầu nạp tiền đến Admin.\n⚠️ Lưu ý: Yêu cầu chỉ có hiệu lực duyệt trong vòng 20 phút!")
         else:
-            await query.edit_message_text("✅ Đã gửi yêu cầu nạp tiền đến Admin.\n⚠️ Lưu ý: Yêu cầu của bạn chỉ có hiệu lực kiểm tra và duyệt trong vòng 20 phút!")
+            await query.edit_message_text("✅ Đã gửi yêu cầu nạp tiền đến Admin.\n⚠️ Lưu ý: Yêu cầu chỉ có hiệu lực duyệt trong vòng 20 phút!")
 
-    # 3. Kiểm tra số dư tài khoản khách
+    # 3. Kiểm tra số dư tài khoản
     elif data == 'balance':
         cursor.execute("SELECT balance FROM users WHERE user_id=?", (user_id,))
         row = cursor.fetchone()
@@ -102,7 +99,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = [[InlineKeyboardButton("« Quay lại", callback_data='back_start')]]
         await query.edit_message_text(f"💰 Số dư hiện tại của bạn là: **{bal:,}đ**", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
 
-    # 4. Logic xử lý mua tài khoản (Giá cố định 1,000đ)
+    # 4. Logic mua tài khoản (Giá cố định 1,000đ)
     elif data == 'buy':
         price = 1000  
         
@@ -136,7 +133,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = [[InlineKeyboardButton("« Quay lại", callback_data='back_start')]]
         await query.edit_message_text(f"📦 Số lượng tài khoản hiện có trong kho: **{count}** acc.", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
 
-    # 6. Quay lại menu chính và dọn dẹp tin nhắn ảnh cũ
+    # 6. Quay lại menu chính
     elif data == 'back_start':
         if query.message.photo:
             await query.message.delete()
@@ -151,7 +148,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await start(update, context)
 
-    # 7. Admin bấm nút Duyệt Cộng Tiền (Cải tiến check thời gian quá 20 phút)
+    # 7. Admin bấm nút Duyệt Cộng Tiền (Kiểm tra mốc thời gian 20 phút)
     elif data.startswith('approve_'):
         if user_id != ADMIN_ID:
             return
@@ -161,14 +158,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # 20 phút = 1200 giây
         if int(time.time()) - created_time > 1200:
-            await query.edit_message_text("❌ **ĐƠN QUÁ HẠN:** Yêu cầu nạp tiền này đã quá hạn 20 phút. Hệ thống đã tự động từ chối lệnh duyệt này!")
+            await query.edit_message_text("❌ **ĐƠN QUÁ HẠN:** Yêu cầu nạp tiền này đã quá hạn 20 phút. Hệ thống đã tự động hủy đơn!")
             try:
-                await context.bot.send_message(chat_id=uid, text="⚠️ **THÔNG BÁO QUÁ HẠN:** Yêu cầu nạp tiền của bạn đã bị hủy do Admin không duyệt trong vòng 20 phút. Vui lòng tạo lại đơn nạp mới.")
+                await context.bot.send_message(chat_id=uid, text="⚠️ **THÔNG BÁO QUÁ HẠN:** Yêu cầu nạp tiền của bạn đã bị hủy do Admin không duyệt trong vòng 20 phút. Vui lòng tạo đơn nạp mới.")
             except Exception:
                 pass
             return
             
-        # Nếu hợp lệ trong 20 phút -> Tiến hành cộng tiền
         cursor.execute("INSERT OR IGNORE INTO users (user_id, balance) VALUES (?, 0)", (uid,))
         cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id=?", (amt, uid))
         conn.commit()
@@ -179,28 +175,29 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
-    # 8. Admin bấm nút Từ Chối / Hủy Đơn của khách
+    # 8. Admin bấm nút Từ Chối / Hủy Đơn
     elif data.startswith('deny_'):
         if user_id != ADMIN_ID:
             return
         uid = int(data.split('_')[1])
         
-        await query.edit_message_text(f"❌ Bạn đã chủ động từ chối yêu cầu nạp tiền của thành viên: `{uid}`", parse_mode='Markdown')
+        await query.edit_message_text(f"❌ Bạn đã từ chối yêu cầu nạp tiền của thành viên: `{uid}`", parse_mode='Markdown')
         try:
-            await context.bot.send_message(chat_id=uid, text="⚠️ **THÔNG BÁO HỦY ĐƠN**\nYêu cầu nạp tiền của bạn đã bị từ chối bởi Admin. Vui lòng liên hệ hỗ trợ nếu có sai sót.")
+            await context.bot.send_message(chat_id=uid, text="⚠️ **THÔNG BÁO HỦY ĐƠN**\nYêu cầu nạp tiền của bạn đã bị từ chối bởi Admin.")
         except Exception:
             pass
 
-# --- LỆNH QUẢN TRỊ ADMIN (ẨN HOÀN TOÀN VỚI NGƯỜI THƯỜNG) ---
+# --- LỆNH QUẢN TRỊ ADMIN ---
 
-# Thêm tài khoản: /addacc thien2k6thicau|thienngonzai2k6
+# Thêm tài khoản: /addacc tk|mk
 async def add_acc(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return 
         
     acc_data = " ".join(context.args)
     if not acc_data:
-        await update.message.reply_text("⚠️ Cú pháp: `/addacc tài_khoản\|mật_khẩu`", parse_mode='Markdown')
+        # Sử dụng raw string (r"...") để loại bỏ triệt để cảnh báo SyntaxWarning của Python
+        await update.message.reply_text(r"⚠️ Cú pháp: `/addacc tài_khoản\|mật_khẩu`", parse_mode='Markdown')
         return
         
     cursor.execute("INSERT INTO accounts (data) VALUES (?)", (acc_data,))
@@ -208,9 +205,9 @@ async def add_acc(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     cursor.execute("SELECT COUNT(*) FROM accounts")
     total = cursor.fetchone()[0]
-    await update.message.reply_text(f"✅ Đã thêm tài khoản thành công vào kho SQLite.\n📦 Số lượng acc hiện tại: **{total}**", parse_mode='Markdown')
+    await update.message.reply_text(f"✅ Đã thêm tài khoản thành công.\n📦 Số lượng acc hiện tại: **{total}**", parse_mode='Markdown')
 
-# Thêm hoặc Đổi ảnh QR nạp tiền: Gửi ảnh kèm dòng mô tả (caption) ghi chữ /addqr
+# Thêm hoặc Đổi ảnh QR nạp tiền: Gửi 1 tấm ảnh kèm chú thích (caption) ghi chữ /addqr
 async def add_qr(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
@@ -230,10 +227,9 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("addacc", add_acc))
     
-    # Bắt riêng trường hợp Admin gửi ảnh kèm chữ /addqr trong caption mô tả ảnh
+    # Nhận diện Admin gửi ảnh kèm chữ /addqr trong phần chú thích
     app.add_handler(MessageHandler(filters.PHOTO & filters.CaptionRegex('^/addqr'), add_qr))
-    
     app.add_handler(CallbackQueryHandler(button_handler))
     
-    print("--- Hệ thống Bot Shop Liên Quân hoạt động bảo mật 24/24 ---")
+    print("--- Hệ thống Bot Shop đang chạy ổn định ---")
     app.run_polling()
