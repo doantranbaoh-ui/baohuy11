@@ -1,40 +1,41 @@
-import telebot as tele
 import sqlite3
 import logging
 import requests
-import io
-from PIL import Image
-from pyzbar.pyzbar import decode
+import telebot as tele
+# Gọi hàm keep_alive từ file keep_alive.py vừa tạo
 from keep_alive import keep_alive
 
-# --- TỰ ĐỘNG CHẠY WEB SERVER KEEP_ALIVE ---
+# --- TỰ ĐỘNG KHỞI CHẠY WEB SERVER ĐỂ GIỮ CHẠY 24/7 ---
 keep_alive()
 
-# --- CẤU HÌNH HỆ THỐNG ---
-BOT_TOKEN = "6367532329:AAE4QlpU0abr7lfPTDxZWugKVOcB_usdSYg"  # Thay Token Bot Telegram của bạn vào đây
-ADMIN_ID = 5736655322              # Thay ID Chát Telegram của bạn vào đây (Kiểu số)
+# =====================================================================
+# CẤU HÌNH HỆ THỐNG BOT
+# =====================================================================
+BOT_TOKEN = "6367532329:AAE4QlpU0abr7lfPTDxZWugKVOcB_usdSYg"  # 🔴 Thay Token Bot Telegram của bạn vào đây
+ADMIN_ID = 5736655322              # 🔴 Thay ID Chat Telegram của bạn vào đây (Kiểu số)
 PRICE_RD = 500                   # Thiết lập giá bán 1 acc ngẫu nhiên (1,000đ)
 
-# Cấu hình đường dẫn hỗ trợ của Shop
-TELEGRAM_GROUP_URL = "https://t.me/baohuydevs" 
+# Cấu hình thông tin hỗ trợ
+TELEGRAM_GROUP_URL = "https://t.me/baohuydevs"
 ADMIN_USERNAME = "baohuyno1" # Username Telegram viết liền không dấu @
 
-# Cấu hình LOGGING để theo dõi hệ thống trên Render Logs
+# Cấu hình log hệ thống để theo dõi lỗi trên Render Logs
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Khởi tạo instance Bot
 bot = tele.TeleBot(BOT_TOKEN)
 
-# --- HÀM KẾT NỐI DATABASE (ĐÃ TỐI ƯU CHO RENDER) ---
+
+# =====================================================================
+# QUẢN LÝ CƠ SỞ DỮ LIỆU (SQLITE TRÊN RENDER)
+# =====================================================================
 def get_db_connection():
-    # Sử dụng thư mục /tmp/ để bảo đảm Render cho phép quyền ĐỌC/GHI dữ liệu liên tục không bị lỗi khóa file
     conn = sqlite3.connect('/tmp/shop_lienquan.db', timeout=15)
     conn.execute('PRAGMA journal_mode=WAL;')
     conn.row_factory = sqlite3.Row
     return conn
 
-# --- KHỞI TẠO CƠ SỞ DỮ LIỆU ---
 def init_db():
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -85,7 +86,10 @@ def check_user(user_id, username):
         conn.commit()
     conn.close()
 
-# --- HÀM PHÂN TÍCH CHUỒI VIETQR (EMVCo) CHUẨN NGÂN HÀNG ---
+
+# =====================================================================
+# BỘ PHÂN TÍCH CHUỒI VIETQR CHUẨN NGÂN HÀNG (EMVCo)
+# =====================================================================
 def parse_vietqr_string(qr_text):
     try:
         if "000201" not in qr_text or "3854" not in qr_text:
@@ -114,7 +118,10 @@ def parse_vietqr_string(qr_text):
     except Exception:
         return None
 
-# --- GIAO DIỆN MENU CHÍNH KHÁCH HÀNG ---
+
+# =====================================================================
+# GIAO DIỆN VÀ TÍNH NĂNG KHÁCH HÀNG
+# =====================================================================
 def get_main_menu_keyboard():
     markup = tele.types.InlineKeyboardMarkup(row_width=2)
     btn_buy = tele.types.InlineKeyboardButton("🛒 Mua Acc Ngẫu Nhiên", callback_data="user_buy_rd")
@@ -127,7 +134,6 @@ def get_main_menu_keyboard():
     markup.add(btn_support)
     return markup
 
-# --- LỆNH /START KHỞI ĐỘNG BOT ---
 @bot.message_handler(commands=['start'])
 def start_cmd(message):
     check_user(message.from_user.id, message.from_user.username)
@@ -140,33 +146,34 @@ def start_cmd(message):
     )
     bot.reply_to(message, welcome_text, reply_markup=get_main_menu_keyboard(), parse_mode="Markdown")
 
-# --- QUẢN LÝ THAY ĐỔI CẤU HÌNH NGÂN HÀNG BẰNG CÁCH GỬI ẢNH QR ---
+
+# =====================================================================
+# PHÂN HỆ QUÉT QR ĐỔI CẤU HÌNH BANK (DÙNG API ONLINE KHÔNG LỖI)
+# =====================================================================
 @bot.message_handler(content_types=['photo'])
 def handle_admin_qr_photo(message):
-    # Rào chắn bảo mật: Chỉ duy nhất tài khoản Admin ID được sử dụng tính năng này
     if message.from_user.id != ADMIN_ID:
         return
 
-    status_msg = bot.reply_to(message, "⏳ Đang tải ảnh xuống và tiến hành giải mã dữ liệu QR Bank...")
+    status_msg = bot.reply_to(message, "⏳ Đang gửi ảnh lên máy chủ quét dữ liệu QR Bank...")
     
     try:
-        # Lấy file ảnh chất lượng cao nhất
         file_info = bot.get_file(message.photo[-1].file_id)
-        downloaded_file = bot.download_file(file_info.file_path)
+        file_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_info.file_path}"
         
-        # Đọc dữ liệu ảnh sang định dạng xử lý của PIL
-        image = Image.open(io.BytesIO(downloaded_file))
+        api_scan_url = f"https://api.qrserver.com/v1/read-qr-code/?file={file_url}"
+        response = requests.get(api_scan_url, timeout=15).json()
         
-        # Giải mã QR Code
-        decoded_objects = decode(image)
-        
-        if not decoded_objects:
+        qr_text = None
+        if response and isinstance(response, list) and "symbol" in response[0]:
+            symbol_data = response[0]["symbol"][0]
+            if symbol_data.get("data"):
+                qr_text = symbol_data["data"]
+                
+        if not qr_text:
             bot.edit_message_text("❌ Không thể tìm thấy hoặc đọc được mã QR nào trong hình ảnh sếp vừa gửi. Vui lòng gửi ảnh chụp trực diện, rõ nét hơn!", message.chat.id, status_msg.message_id)
             return
             
-        qr_text = decoded_objects[0].data.decode('utf-8')
-        
-        # Phân tích chuỗi VietQR thu được
         parsed = parse_vietqr_string(qr_text)
         
         if not parsed:
@@ -175,7 +182,6 @@ def handle_admin_qr_photo(message):
             
         bank_bin, bank_acc = parsed
         
-        # Ghi đè cấu hình mới vào database
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("UPDATE config_qr SET bank_bin = ?, bank_acc = ? WHERE id = 1", (bank_bin, bank_acc))
@@ -195,14 +201,16 @@ def handle_admin_qr_photo(message):
         logger.error(f"Lỗi phân tích QR: {e}")
         bot.edit_message_text(f"❌ Có lỗi phát sinh khi xử lý tệp ảnh: `{str(e)}`", message.chat.id, status_msg.message_id, parse_mode="Markdown")
 
-# --- HÀM TẠO ẢNH QR ĐỘNG CHÈN MỆNH GIÁ TỰ ĐỘNG ---
+
+# =====================================================================
+# LOGIC TẠO MÃ QR ĐỘNG GẮN ĐƠN NẠP VÀ MỆNH GIÁ
+# =====================================================================
 def send_dynamic_qr(chat_id, user_id, username, amount):
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT bank_bin, bank_acc, bank_name FROM config_qr WHERE id = 1")
     row = cursor.fetchone()
     
-    # Tạo đơn nạp lưu lại thông tin hệ thống
     cursor.execute("INSERT INTO deposit_requests (user_id, username, amount) VALUES (?, ?, ?)", (user_id, username, amount))
     request_id = cursor.lastrowid
     conn.commit()
@@ -211,10 +219,8 @@ def send_dynamic_qr(chat_id, user_id, username, amount):
     bank_bin, bank_acc, bank_name = row['bank_bin'], row['bank_acc'], row['bank_name']
     memo = f"NAP {request_id}"
     
-    # Gọi API VietQR để tự động dựng hình ảnh mã QR bao gồm số tiền và nội dung chuyển khoản
     qr_url = f"https://api.vietqr.io/image/{bank_bin}-{bank_acc}-qr_only.jpg?amount={int(amount)}&addInfo={memo}&accountName={bank_name}"
 
-    # Đẩy thông báo khẩn tới Admin
     admin_markup = tele.types.InlineKeyboardMarkup()
     btn_approve = tele.types.InlineKeyboardButton("✅ Duyệt Ngay", callback_data=f"adm_pub_approve_{request_id}")
     btn_reject = tele.types.InlineKeyboardButton("❌ Hủy Đơn", callback_data=f"adm_pub_reject_{request_id}")
@@ -230,17 +236,15 @@ def send_dynamic_qr(chat_id, user_id, username, amount):
         reply_markup=admin_markup, parse_mode="Markdown"
     )
 
-    # Trả ảnh QR động về cho khách hàng
     user_text = (
         f"✨ **MÃ QR NẠP TIỀN TỰ ĐỘNG (ĐƠN #{request_id})** ✨\n"
         f"──────────────────────────\n"
         f"💵 Số tiền: **{int(amount):,} VNĐ**\n"
         f"📝 Nội dung chuyển khoản: `{memo}`\n\n"
         f"📌 **HƯỚNG DẪN CHUYỂN KHOẢN:**\n"
-        f"1. Chụp hình hoặc lưu ảnh QR Code này về máy.\n"
-        f"2. Truy cập ứng dụng Ngân hàng của bạn và chọn mục **Quét QR**.\n"
-        f"3. Hệ thống sẽ **TỰ ĐỘNG ĐIỀN** chuẩn xác số tiền và nội dung chuyển khoản.\n"
-        f"4. Nhấn xác nhận chuyển tiền. Số dư tài khoản Telegram sẽ được cộng khi Admin phê duyệt đơn!"
+        f"1. Lưu ảnh QR Code này về máy.\n"
+        f"2. Mở app ngân hàng quét mã QR, hệ thống sẽ tự động điền số tiền và nội dung.\n"
+        f"3. Xác nhận chuyển khoản. Số dư tài khoản Telegram sẽ tự cộng sau khi Admin phê duyệt đơn!"
     )
     user_markup = tele.types.InlineKeyboardMarkup().add(tele.types.InlineKeyboardButton("⬅️ Quay Lại Menu Chính", callback_data="user_back_to_main_from_photo"))
     bot.send_photo(chat_id, qr_url, caption=user_text, reply_markup=user_markup, parse_mode="Markdown")
@@ -256,14 +260,16 @@ def process_custom_amount(message):
     except ValueError:
         bot.reply_to(message, "❌ Lỗi định dạng chữ số. Vui lòng nhập số tiền bằng ký tự số (Ví dụ: 50000).")
 
-# --- XỬ LÝ SỰ KIỆN TẤT CẢ NÚT BẤM CHUỘT (CALLBACK QUERY) ---
+
+# =====================================================================
+# XỬ LÝ SỰ KIỆN NÚT BẤM (CALLBACK QUERY)
+# =====================================================================
 @bot.callback_query_handler(func=lambda call: True)
 def handle_all_callbacks(call):
     user_id = call.from_user.id
     username = call.from_user.username if call.from_user.username else f"User_{user_id}"
     data = call.data
 
-    # 👤 PHÂN HỆ XỬ LÝ CHO KHÁCH HÀNG
     if data == "user_back_to_main":
         welcome_text = "🤖 **CHÀO MỪNG BẠN ĐẾN VỚI SHOP LIÊN QUÂN TỰ ĐỘNG**\n──────────────────────────\n👇 Vui lòng chọn một chức năng dưới menu để bắt đầu:"
         bot.edit_message_text(welcome_text, call.message.chat.id, call.message.message_id, reply_markup=get_main_menu_keyboard(), parse_mode="Markdown")
@@ -356,7 +362,7 @@ def handle_all_callbacks(call):
         markup = tele.types.InlineKeyboardMarkup().add(tele.types.InlineKeyboardButton("⬅️ Quay Lại Menu Chính", callback_data="user_back_to_main"))
         bot.edit_message_text(success_msg, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
-    # ⚙️ PHÂN HỆ QUẢN TRỊ ĐIỀU HÀNH ADMIN
+    # --- ADMIN CONTROL PANEL ---
     if data.startswith("adm_") or data.startswith("panel_"):
         if user_id != ADMIN_ID:
             bot.answer_callback_query(call.id, "❌ Lỗi: Bạn không có quyền Admin!", show_alert=True)
@@ -418,7 +424,7 @@ def handle_all_callbacks(call):
         bot.edit_message_text(guide_text, call.message.chat.id, call.message.message_id, reply_markup=tele.types.InlineKeyboardMarkup().add(tele.types.InlineKeyboardButton("⬅️ Quay lại", callback_data="panel_main")), parse_mode="Markdown")
 
     elif data == "panel_guide_qr":
-        guide_text = "⚙️ **CÁCH ĐỔI CẤU HÌNH QR BANK**\n\nCực kỳ đơn giản! Sếp dùng tài khoản Admin **gửi trực tiếp hình ảnh mã QR ngân hàng** mới của sếp vào khung chát này. Bot sẽ tự động quét bằng công nghệ ảnh để cập nhật cấu hình!"
+        guide_text = "⚙️ **CÁCH ĐỔI CẤU HÌNH QR BANK**\n\nCực kỳ đơn giản! Sếp dùng tài khoản Admin **gửi trực tiếp hình ảnh mã QR ngân hàng** mới của sếp vào khung chát này. Bot sẽ tự động xử lý qua hệ thống Cloud API để cập nhật thông tin!"
         bot.edit_message_text(guide_text, call.message.chat.id, call.message.message_id, reply_markup=tele.types.InlineKeyboardMarkup().add(tele.types.InlineKeyboardButton("⬅️ Quay lại", callback_data="panel_main")), parse_mode="Markdown")
 
     elif data == "panel_main":
@@ -426,7 +432,10 @@ def handle_all_callbacks(call):
         markup.add(tele.types.InlineKeyboardButton("📥 Xem đơn nạp chờ duyệt", callback_data="panel_view_pending"), tele.types.InlineKeyboardButton("➕ Cách thêm Acc hàng loạt", callback_data="panel_guide_acc"), tele.types.InlineKeyboardButton("⚙️ Cách đổi cấu hình QR Bank", callback_data="panel_guide_qr"))
         bot.edit_message_text("⚙️ **TRUNG TÂM ĐIỀU HÀNH ADMIN SHOP**", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
-# --- LỆNH VĂN BẢN QUẢN TRỊ ADMIN ---
+
+# =====================================================================
+# LỆNH VĂN BẢN (COMMANDS) DÀNH CHO ADMIN
+# =====================================================================
 @bot.message_handler(commands=['admin_panel'])
 def admin_panel_cmd(message):
     if message.from_user.id != ADMIN_ID: return
@@ -452,7 +461,10 @@ def addacc_cmd(message):
     conn.close()
     bot.reply_to(message, f"✅ Đã nạp thành công **{added_count}** tài khoản mới vào kho hàng.")
 
-# --- KHỞI CHẠY ĐỘNG CƠ BOT TỐI ƯU HOÀN TOÀN CHO RENDER ---
+
+# =====================================================================
+# KHỞI CHẠY ĐỘNG CƠ POLLING
+# =====================================================================
 if __name__ == '__main__':
     logger.info("Bot đang kết nối với máy chủ Render...")
     try: bot.delete_webhook(drop_pending_updates=True)
