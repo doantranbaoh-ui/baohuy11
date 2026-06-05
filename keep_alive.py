@@ -1,24 +1,19 @@
-import logging
-from flask import Flask
+import os
 from threading import Thread
+from flask import Flask
 
-# Vô hiệu hóa log chi tiết của Flask để tránh làm rác terminal trên Render
-log = logging.getLogger('werkzeug')
-log.setLevel(logging.ERROR)
+flask_app = Flask('')
 
-app = Flask('')
-
-@app.route('/')
+@flask_app.route('/')
 def home():
     return "Hệ thống Shop Liên Quân đang hoạt động ổn định 24/7!", 200
 
-def run():
-    # Render chỉ định cổng qua biến môi trường PORT, mặc định chạy cổng 8080 nếu chạy local
-    import os
+def run_flask():
+    # Render tự động cấp cổng qua biến môi trường PORT, mặc định là 8080 nếu chạy local
     port = int(os.environ.get("PORT", 8080))
-    app.run(host='0.0.0.0', port=port)
+    flask_app.run(host='0.0.0.0', port=port)
 
 def keep_alive():
-    t = Thread(target=run)
+    t = Thread(target=run_flask)
     t.daemon = True
     t.start()
