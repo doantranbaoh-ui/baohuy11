@@ -1,7 +1,6 @@
-import telebot
+import telebot as tele  # Đồng bộ cải tiến sử dụng 'tele' ngắn gọn
 import sqlite3
 import logging
-from telebot import types
 from keep_alive import keep_alive
 
 # --- TỰ ĐỘNG CHẠY WEB SERVER KEEP_ALIVE ---
@@ -12,19 +11,26 @@ BOT_TOKEN = "6367532329:AAFnrKe1Ra3UWiRV-PDGNBa49rP030NJcd0"  # Thay Token Bot T
 ADMIN_ID = 5736655322              # Thay ID Chát Telegram của bạn vào đây
 PRICE_RD = 500                   # Thiết lập giá bán 1 acc ngẫu nhiên (1,000đ)
 
+# Cấu hình đường dẫn hỗ trợ của Shop
+TELEGRAM_GROUP_URL = "https://t.me/baohuydevs" 
+ADMIN_USERNAME = "baohuyno1" # Username Telegram viết liền không dấu @
+
 # Cấu hình LOGGING để theo dõi hệ thống
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-bot = telebot.TeleBot(BOT_TOKEN)
+# Khởi tạo instance Bot qua alias 'tele'
+bot = tele.TeleBot(BOT_TOKEN)
 
-# --- HÀM KẾT NỐI DATABASE AN TOÀN ---
+# --- HÀM KẾT NỐI DATABASE TỐI ƯU ---
 def get_db_connection():
-    conn = sqlite3.connect('shop_lienquan.db', timeout=10)
+    # Tăng timeout và bật chế độ WAL giúp ghi/đọc DB đa luồng từ bot ổn định hơn
+    conn = sqlite3.connect('shop_lienquan.db', timeout=15)
+    conn.execute('PRAGMA journal_mode=WAL;')
     conn.row_factory = sqlite3.Row
     return conn
 
-# --- KHỞI TẠO CƠ SỞ DỮ LIỆU ---
+# --- KHỞI TẠO CƠ SỞ DỮ LIỆU THỰC THI BAN ĐẦU ---
 def init_db():
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -75,20 +81,20 @@ def check_user(user_id, username):
         conn.commit()
     conn.close()
 
-# --- GIAO DIỆN MENU CHÍNH ---
+# --- GIAO DIỆN MENU CHÍNH CHUẨN ĐẸP ---
 def get_main_menu_keyboard():
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    btn_buy = types.InlineKeyboardButton("🛒 Mua Acc Ngẫu Nhiên", callback_data="user_buy_rd")
-    btn_stock = types.InlineKeyboardButton("📦 Kiểm Tra Kho", callback_data="user_check_stock")
-    btn_balance = types.InlineKeyboardButton("💳 Kiểm Tra Số Dư", callback_data="user_check_balance")
-    btn_deposit = types.InlineKeyboardButton("💰 Nạp Tiền Vào Ví", callback_data="user_deposit_menu")
-    btn_support = types.InlineKeyboardButton("📞 Liên Hệ Admin / Hỗ Trợ", callback_data="user_support")
+    markup = tele.types.InlineKeyboardMarkup(row_width=2)
+    btn_buy = tele.types.InlineKeyboardButton("🛒 Mua Acc Ngẫu Nhiên", callback_data="user_buy_rd")
+    btn_stock = tele.types.InlineKeyboardButton("📦 Kiểm Tra Kho", callback_data="user_check_stock")
+    btn_balance = tele.types.InlineKeyboardButton("💳 Kiểm Tra Số Dư", callback_data="user_check_balance")
+    btn_deposit = tele.types.InlineKeyboardButton("💰 Nạp Tiền Vào Ví", callback_data="user_deposit_menu")
+    btn_support = tele.types.InlineKeyboardButton("📞 Liên Hệ Admin / Hỗ Trợ", callback_data="user_support")
     
     markup.add(btn_buy, btn_stock, btn_balance, btn_deposit)
     markup.add(btn_support)
     return markup
 
-# --- LỆNH KHỞI ĐỘNG CHÍNH CHÚC MỪNG KHÁCH HÀNG ---
+# --- LỆNH /START KHỞI ĐỘNG HỆ THỐNG ---
 @bot.message_handler(commands=['start'])
 def start_cmd(message):
     check_user(message.from_user.id, message.from_user.username)
@@ -101,7 +107,7 @@ def start_cmd(message):
     )
     bot.reply_to(message, welcome_text, reply_markup=get_main_menu_keyboard(), parse_mode="Markdown")
 
-# Lệnh gõ nhanh /qr chỉ trả về duy nhất ảnh mã QR VietQR sạch đẹp
+# Lệnh /qr hiển thị nhanh mã QR nạp tiền tài khoản ngân hàng
 @bot.message_handler(commands=['qr'])
 def qr_cmd(message):
     conn = get_db_connection()
@@ -113,10 +119,10 @@ def qr_cmd(message):
     bank_bin, bank_acc, bank_name = row['bank_bin'], row['bank_acc'], row['bank_name']
     qr_url = f"https://api.vietqr.io/image/{bank_bin}-{bank_acc}-compact.jpg?accountName={bank_name}&add=1"
     
-    markup = types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("⬅️ Quay Lại Menu Chính", callback_data="user_back_to_main_from_photo"))
+    markup = tele.types.InlineKeyboardMarkup().add(tele.types.InlineKeyboardButton("⬅️ Quay Lại Menu Chính", callback_data="user_back_to_main_from_photo"))
     bot.send_photo(message.chat.id, qr_url, reply_markup=markup)
 
-# Lệnh /nap bằng chữ văn bản truyền thống
+# Lệnh nạp số dư thủ công dạng văn bản văn minh /nap 50000
 @bot.message_handler(commands=['nap'])
 def nap_cmd(message):
     check_user(message.from_user.id, message.from_user.username)
@@ -140,9 +146,9 @@ def nap_cmd(message):
         conn.commit()
         conn.close()
 
-        markup = types.InlineKeyboardMarkup()
-        btn_approve = types.InlineKeyboardButton("✅ Duyệt Ngay", callback_data=f"adm_pub_approve_{request_id}")
-        btn_reject = types.InlineKeyboardButton("❌ Hủy Đơn", callback_data=f"adm_pub_reject_{request_id}")
+        markup = tele.types.InlineKeyboardMarkup()
+        btn_approve = tele.types.InlineKeyboardButton("✅ Duyệt Ngay", callback_data=f"adm_pub_approve_{request_id}")
+        btn_reject = tele.types.InlineKeyboardButton("❌ Hủy Đơn", callback_data=f"adm_pub_reject_{request_id}")
         markup.add(btn_approve, btn_reject)
 
         bot.send_message(
@@ -191,9 +197,9 @@ def handle_all_callbacks(call):
             f"💵 Số dư hiện tại: **{int(balance):,} VNĐ**\n\n"
             f"💡 _Bạn có thể nạp thêm tiền bằng nút dưới đây nếu muốn mua thêm acc._"
         )
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("💰 Nạp Tiền Ngay", callback_data="user_deposit_menu"))
-        markup.add(types.InlineKeyboardButton("⬅️ Quay Lại Menu", callback_data="user_back_to_main"))
+        markup = tele.types.InlineKeyboardMarkup()
+        markup.add(tele.types.InlineKeyboardButton("💰 Nạp Tiền Ngay", callback_data="user_deposit_menu"))
+        markup.add(tele.types.InlineKeyboardButton("⬅️ Quay Lại Menu", callback_data="user_back_to_main"))
         bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
     elif data == "user_check_stock":
@@ -211,20 +217,24 @@ def handle_all_callbacks(call):
             f"⚡ Tình trạng kho: Còn **{count}** tài khoản\n\n"
             f"👇 Bấm nút dưới đây để tiến hành mua ngay:"
         )
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("🛒 Mua Liền Tay", callback_data="user_buy_rd"))
-        markup.add(types.InlineKeyboardButton("⬅️ Quay Lại Menu", callback_data="user_back_to_main"))
+        markup = tele.types.InlineKeyboardMarkup()
+        markup.add(tele.types.InlineKeyboardButton("🛒 Mua Liền Tay", callback_data="user_buy_rd"))
+        markup.add(tele.types.InlineKeyboardButton("⬅️ Quay Lại Menu", callback_data="user_back_to_main"))
         bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
     elif data == "user_support":
         text = (
             f"📞 **TRUNG TÂM HỖ TRỢ KHÁCH HÀNG**\n"
             f"──────────────────────────\n"
-            f"Nếu gặp lỗi trong quá trình nạp tiền, lỗi tài khoản hoặc cần tư vấn thêm, sếp vui lòng liên hệ trực tiếp với Admin qua thông tin bên dưới.\n\n"
-            f"👤 **Admin:** Hãy_Điền_Username_Của_Bạn_Vào\n"
+            f"Nếu gặp lỗi trong quá trình nạp tiền, lỗi tài khoản hoặc cần tư vấn thêm, sếp vui lòng liên hệ trực tiếp với hệ thống.\n\n"
+            f"👤 **Admin Chăm Sóc:** @{ADMIN_USERNAME}\n"
             f"⏰ Thời gian hỗ trợ: 08:00 - 23:00 hàng ngày."
         )
-        markup = types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("⬅️ Quay Lại Menu", callback_data="user_back_to_main"))
+        markup = tele.types.InlineKeyboardMarkup(row_width=1)
+        btn_tg = tele.types.InlineKeyboardButton("💬 Tham Gia Nhóm Telegram Shop", url=TELEGRAM_GROUP_URL)
+        btn_back = tele.types.InlineKeyboardButton("⬅️ Quay Lại Menu", callback_data="user_back_to_main")
+        markup.add(btn_tg, btn_back)
+        
         bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
     elif data == "user_deposit_menu":
@@ -238,7 +248,7 @@ def handle_all_callbacks(call):
         qr_url = f"https://api.vietqr.io/image/{bank_bin}-{bank_acc}-compact.jpg?accountName={bank_name}&add=1"
         
         bot.delete_message(call.message.chat.id, call.message.message_id)
-        markup = types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("⬅️ Quay Lại Menu Chính", callback_data="user_back_to_main_from_photo"))
+        markup = tele.types.InlineKeyboardMarkup().add(tele.types.InlineKeyboardButton("⬅️ Quay Lại Menu Chính", callback_data="user_back_to_main_from_photo"))
         bot.send_photo(call.message.chat.id, qr_url, reply_markup=markup)
 
     elif data == "user_back_to_main_from_photo":
@@ -266,9 +276,9 @@ def handle_all_callbacks(call):
                 f"💳 Ví của bạn: **{int(balance):,}đ**\n\n"
                 f"Vui lòng nạp thêm tiền vào ví để tiếp tục mua sắm."
             )
-            markup = types.InlineKeyboardMarkup()
-            markup.add(types.InlineKeyboardButton("💰 Nạp Tiền Ngay", callback_data="user_deposit_menu"))
-            markup.add(types.InlineKeyboardButton("⬅️ Quay Lại Menu", callback_data="user_back_to_main"))
+            markup = tele.types.InlineKeyboardMarkup()
+            markup.add(tele.types.InlineKeyboardButton("💰 Nạp Tiền Ngay", callback_data="user_deposit_menu"))
+            markup.add(tele.types.InlineKeyboardButton("⬅️ Quay Lại Menu", callback_data="user_back_to_main"))
             bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
             return
             
@@ -278,7 +288,7 @@ def handle_all_callbacks(call):
         if not acc:
             conn.close()
             text = "😭 **HẾT HÀNG MẤT RỒI**\n──────────────────────────\nHiện tại kho acc ngẫu nhiên vừa hết sạch hàng. Admin đang tích cực bổ sung kho acc, sếp vui lòng quay lại sau ít phút nhé!"
-            markup = types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("⬅️ Quay Lại", callback_data="user_back_to_main"))
+            markup = tele.types.InlineKeyboardMarkup().add(tele.types.InlineKeyboardButton("⬅️ Quay Lại", callback_data="user_back_to_main"))
             bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
             return
             
@@ -299,7 +309,7 @@ def handle_all_callbacks(call):
             f"💳 Số dư còn lại: **{int(new_balance):,}đ**\n\n"
             f"⚠️ *Lưu ý:* Hãy đổi mật khẩu và liên kết thông tin bảo mật ngay sau khi nhận tài khoản."
         )
-        markup = types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("⬅️ Quay Lại Menu Chính", callback_data="user_back_to_main"))
+        markup = tele.types.InlineKeyboardMarkup().add(tele.types.InlineKeyboardButton("⬅️ Quay Lại Menu Chính", callback_data="user_back_to_main"))
         bot.edit_message_text(success_msg, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
     # ────────────────────────────────────────────────────────
@@ -363,15 +373,15 @@ def handle_all_callbacks(call):
             return
             
         text = "📥 **DANH SÁCH ĐƠN NẠP CHỜ DUYỆT (MỚI NHẤT):**\n\n"
-        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup = tele.types.InlineKeyboardMarkup(row_width=2)
         
         for row in rows:
             text += f"🔹 Đơn `#{row['id']}` - Khách: @{row['username']} - Số tiền: **{int(row['amount']):,}đ**\n"
-            btn_ok = types.InlineKeyboardButton(f"✅ Duyệt #{row['id']}", callback_data=f"adm_pub_approve_{row['id']}")
-            btn_no = types.InlineKeyboardButton(f"❌ Huỷ #{row['id']}", callback_data=f"adm_pub_reject_{row['id']}")
+            btn_ok = tele.types.InlineKeyboardButton(f"✅ Duyệt #{row['id']}", callback_data=f"adm_pub_approve_{row['id']}")
+            btn_no = tele.types.InlineKeyboardButton(f"❌ Huỷ #{row['id']}", callback_data=f"adm_pub_reject_{row['id']}")
             markup.add(btn_ok, btn_no)
             
-        markup.add(types.InlineKeyboardButton("⬅️ Quay lại Menu Admin", callback_data="panel_main"))
+        markup.add(tele.types.InlineKeyboardButton("⬅️ Quay lại Menu Admin", callback_data="panel_main"))
         bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
     elif data == "panel_guide_acc":
@@ -383,7 +393,7 @@ def handle_all_callbacks(call):
             "`taikhoan2|matkhau2`\n\n"
             "_Lưu ý: Lệnh `/addacc` ở dòng đầu tiên, danh sách tài khoản nằm ở các dòng tiếp theo._"
         )
-        markup = types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("⬅️ Quay lại", callback_data="panel_main"))
+        markup = tele.types.InlineKeyboardMarkup().add(tele.types.InlineKeyboardButton("⬅️ Quay lại", callback_data="panel_main"))
         bot.edit_message_text(guide_text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
     elif data == "panel_guide_qr":
@@ -394,30 +404,30 @@ def handle_all_callbacks(call):
             "Ví dụ mẫu:\n"
             "`/addqr 970422 0123456789 NGUYEN VAN A`"
         )
-        markup = types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("⬅️ Quay lại", callback_data="panel_main"))
+        markup = tele.types.InlineKeyboardMarkup().add(tele.types.InlineKeyboardButton("⬅️ Quay lại", callback_data="panel_main"))
         bot.edit_message_text(guide_text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
     elif data == "panel_main":
-        markup = types.InlineKeyboardMarkup(row_width=1)
-        btn_view_pending = types.InlineKeyboardButton("📥 Xem các đơn nạp chờ duyệt", callback_data="panel_view_pending")
-        btn_guide_acc = types.InlineKeyboardButton("➕ Cách thêm Acc hàng loạt", callback_data="panel_guide_acc")
-        btn_guide_qr = types.InlineKeyboardButton("⚙️ Cách đổi cấu hình QR Bank", callback_data="panel_guide_qr")
+        markup = tele.types.InlineKeyboardMarkup(row_width=1)
+        btn_view_pending = tele.types.InlineKeyboardButton("📥 Xem các đơn nạp chờ duyệt", callback_data="panel_view_pending")
+        btn_guide_acc = tele.types.InlineKeyboardButton("➕ Cách thêm Acc hàng loạt", callback_data="panel_guide_acc")
+        btn_guide_qr = tele.types.InlineKeyboardButton("⚙️ Cách đổi cấu hình QR Bank", callback_data="panel_guide_qr")
         markup.add(btn_view_pending, btn_guide_acc, btn_guide_qr)
         bot.edit_message_text("⚙️ **TRUNG TÂM ĐIỀU HÀNH ADMIN SHOP**\n\nChào sếp, vui lòng chọn tính năng cần xử lý nhanh:", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
 
 # ────────────────────────────────────────────────────────
-# 🔒 LỆNH VĂN BẢN QUẢN TRỊ ADMIN (ẨN GIẤU AN TOÀN)
+# 🔒 LỆNH VĂN BẢN QUẢN TRỊ ADMIN (ẨN GIẤU BẢO MẬT)
 # ────────────────────────────────────────────────────────
 
 @bot.message_handler(commands=['admin_panel'])
 def admin_panel_cmd(message):
     if message.from_user.id != ADMIN_ID:
         return
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    btn_view_pending = types.InlineKeyboardButton("📥 Xem các đơn nạp chờ duyệt", callback_data="panel_view_pending")
-    btn_guide_acc = types.InlineKeyboardButton("➕ Cách thêm Acc hàng loạt", callback_data="panel_guide_acc")
-    btn_guide_qr = types.InlineKeyboardButton("⚙️ Cách đổi cấu hình QR Bank", callback_data="panel_guide_qr")
+    markup = tele.types.InlineKeyboardMarkup(row_width=1)
+    btn_view_pending = tele.types.InlineKeyboardButton("📥 Xem các đơn nạp chờ duyệt", callback_data="panel_view_pending")
+    btn_guide_acc = tele.types.InlineKeyboardButton("➕ Cách thêm Acc hàng loạt", callback_data="panel_guide_acc")
+    btn_guide_qr = tele.types.InlineKeyboardButton("⚙️ Cách đổi cấu hình QR Bank", callback_data="panel_guide_qr")
     markup.add(btn_view_pending, btn_guide_acc, btn_guide_qr)
     bot.reply_to(message, "⚙️ **TRUNG TÂM ĐIỀU HÀNH ADMIN SHOP**\n\nChào sếp, vui lòng chọn tính năng cần xử lý nhanh:", reply_markup=markup, parse_mode="Markdown")
 
@@ -463,4 +473,4 @@ def addqr_cmd(message):
 # --- KHỞI CHẠY ĐỘNG CƠ BOT ---
 if __name__ == '__main__':
     logger.info("Bot Shop Liên Quân bản Giao Diện Sạch đang hoạt động...")
-    bot.infinity_polling(timeout=10, long_polling_timeout=5)
+    bot.infinity_polling(timeout=15, long_polling_timeout=5)
