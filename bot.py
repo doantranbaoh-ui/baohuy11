@@ -1,4 +1,4 @@
-import telebot as tele  # Đồng bộ cải tiến sử dụng 'tele' ngắn gọn
+import telebot as tele  # Sử dụng alias 'tele' ngắn gọn
 import sqlite3
 import logging
 from keep_alive import keep_alive
@@ -15,22 +15,22 @@ PRICE_RD = 500                   # Thiết lập giá bán 1 acc ngẫu nhiên (
 TELEGRAM_GROUP_URL = "https://t.me/baohuydevs" 
 ADMIN_USERNAME = "baohuyno1" # Username Telegram viết liền không dấu @
 
-# Cấu hình LOGGING để theo dõi hệ thống
+# Cấu hình LOGGING để theo dõi hệ thống trên Render Logs
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Khởi tạo instance Bot qua alias 'tele'
+# Khởi tạo instance Bot
 bot = tele.TeleBot(BOT_TOKEN)
 
-# --- HÀM KẾT NỐI DATABASE TỐI ƯU ---
+# --- HÀM KẾT NỐI DATABASE (ĐÃ TỐI ƯU CHO RENDER) ---
 def get_db_connection():
-    # Tăng timeout và bật chế độ WAL giúp ghi/đọc DB đa luồng từ bot ổn định hơn
-    conn = sqlite3.connect('shop_lienquan.db', timeout=15)
+    # Sử dụng thư mục /tmp/ để bảo đảm Render cho phép quyền ĐỌC/GHI dữ liệu liên tục
+    conn = sqlite3.connect('/tmp/shop_lienquan.db', timeout=15)
     conn.execute('PRAGMA journal_mode=WAL;')
     conn.row_factory = sqlite3.Row
     return conn
 
-# --- KHỞI TẠO CƠ SỞ DỮ LIỆU THỰC THI BAN ĐẦU ---
+# --- KHỞI TẠO CƠ SỞ DỮ LIỆU ---
 def init_db():
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -81,7 +81,7 @@ def check_user(user_id, username):
         conn.commit()
     conn.close()
 
-# --- GIAO DIỆN MENU CHÍNH CHUẨN ĐẸP ---
+# --- GIAO DIỆN MENU CHÍNH ---
 def get_main_menu_keyboard():
     markup = tele.types.InlineKeyboardMarkup(row_width=2)
     btn_buy = tele.types.InlineKeyboardButton("🛒 Mua Acc Ngẫu Nhiên", callback_data="user_buy_rd")
@@ -417,7 +417,7 @@ def handle_all_callbacks(call):
 
 
 # ────────────────────────────────────────────────────────
-# 🔒 LỆNH VĂN BẢN QUẢN TRỊ ADMIN (ẨN GIẤU BẢO MẬT)
+# 🔒 LỆNH VĂN BẢN QUẢN TRỊ ADMIN
 # ────────────────────────────────────────────────────────
 
 @bot.message_handler(commands=['admin_panel'])
@@ -470,7 +470,16 @@ def addqr_cmd(message):
     conn.close()
     bot.reply_to(message, f"✅ Đã cập nhật thông tin tài khoản QR ngân hàng thành công!")
 
-# --- KHỞI CHẠY ĐỘNG CƠ BOT ---
+# --- KHỞI CHẠY ĐỘNG CƠ BOT TỐI ƯU HOÀN TOÀN CHO RENDER ---
 if __name__ == '__main__':
-    logger.info("Bot Shop Liên Quân bản Giao Diện Sạch đang hoạt động...")
-    bot.infinity_polling(timeout=15, long_polling_timeout=5)
+    logger.info("Bot đang kết nối với máy chủ Render...")
+    
+    # ⚡ ÉP BUỘC XÓA SẠCH WEBHOOK NGHẼN TRÊN MẠNG
+    try:
+        bot.delete_webhook(drop_pending_updates=True)
+        logger.info("Đã xóa Webhook nghẽn và làm sạch bộ nhớ đệm thành công.")
+    except Exception as e:
+        logger.error(f"Không thể dọn dẹp Webhook cũ: {e}")
+        
+    # Chạy vòng lặp polling liên tục, tự động bỏ qua các lỗi rớt mạng cục bộ trên Cloud
+    bot.infinity_polling(timeout=20, skip_pending_updates=True, long_polling_timeout=10)
