@@ -2,17 +2,23 @@
 import sys, io, time, urllib.parse, os, json, requests, telebot, pytz, random, re, html
 from threading import Thread, Lock
 from datetime import datetime
-from keep_alive import keep_alive
+
+# Phòng chống crash nếu thiếu file keep_alive.py khi chạy trên Replit
+try:
+    from keep_alive import keep_alive
+    keep_alive()
+except ImportError:
+    print("[CẢNH BÁO] Không tìm thấy keep_alive.py, bỏ qua luồng treo 24/7...")
 
 if sys.stdout.encoding != 'utf-8': sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 if sys.stderr.encoding != 'utf-8': sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
-TOKEN = "8080338995:AAGtAejJsqZ8pYKEgcZn-lS198t4eTPej2I"
-ALLOWED_GROUP_ID, ADMIN_ID = -1003925717296, 5736655322              
+# KHUYẾN KHÍCH: Thay các chuỗi dưới đây bằng os.getenv("TÊN_BIẾN") để bảo mật tuyệt đối
+TOKEN = "8080338995:AAFt2FiCfDdmVB01ybOsdum7iQd3400OCfo"
+ALLOWED_GROUP_ID, ADMIN_ID = -1003925717296, 5736655322      
 
 bot = telebot.TeleBot(TOKEN, num_threads=15)  
 VN_TZ = pytz.timezone('Asia/Ho_Chi_Minh')
-keep_alive()
 
 BOT_INFO = bot.get_me() 
 BOT_USERNAME = f"@{BOT_INFO.username}"
@@ -49,28 +55,26 @@ AI_KEYS = [
 ]
 current_key_index = 0  
 
-KHO_THINH = [
-    "Trời đổ mưa rồi, sao anh chưa đổ em?",
-    "Anh ơi, anh có ngửi thấy mùi gì cháy không? Mùi tim em đang cháy vì anh đấy!",
-    "Người ta thích gọi anh là chồng, còn em thì thích gọi anh là của em.",
-    "Anh có biết bơi không? Sao cứ chìm đắm trong tâm trí em hoài thế?",
-    "Trăng dưới nước là trăng trên trời, người trước mặt là người trong tim em.",
-    "Muốn bình yên thì lên chùa cầu phúc, muốn hạnh phúc thì đứng đó đợi em.",
-    "Em không thích xem mười vạn câu hỏi vì sao xuiu nào, em chỉ thích câu trả lời vì sao yêu anh thôi.",
-    "Mọi người cứ bảo em 18 tuổi ngây ngô, nhưng em thừa biết là em thích anh rồi.",
-    "Số điện thoại của em chưa có ai gọi, anh có muốn làm người đầu tiên không?",
-    "Hôm nay trời xanh mây trắng, anh có muốn cùng em viết nên câu chuyện tình?"
+# KHO THOẠI KHỊA TRẺ TRÂU TỰ ĐỘNG THEO GIỜ
+KHO_KHIA = [
+    "Lo mà học hành đi con ạ, bớt cào bàn phím với ảo tưởng giang hồ mạng lại.",
+    "Mở mồm ra là tưởng mình ngầu, nhìn lại xem chả khác gì thằng hề tấu hài.",
+    "Đầu toàn bã đậu mà thích thể hiện, ra đời người ta vả cho không trượt phát nào.",
+    "Suốt ngày cắm mặt vào ba cái video vô tri, tương lai mù mịt như tiền đồ chị Dậu nha con.",
+    "Bớt bớt cái thói ăn nói xà lơ lại, nứt mắt ra đã thích làm đại ca mạng xã hội.",
+    "Người ta khinh không thèm nói chứ tưởng mình là trung tâm vũ trụ chắc?",
+    "Gớm, oai hùm trên mạng làm gì, về nhà mẹ bảo rửa bát còn phụng phịu.",
+    "Đã dốt còn hay nói chữ, bớt tỏ ra nguy hiểm giùm cái đi con ranh."
 ]
 
-KHO_THO = [
-    "Yêu nhau mấy núi cũng trèo\nMấy sông cũng lội, mấy đèo cũng qua.",
-    "Nước non xoay xoay vần vần\nLòng em vẫn giữ vẹn phần yêu anh.",
-    "Người đi một nửa hồn tôi mất\nMột nửa hồn tôi bỗng dại khờ.",
-    "Sóng bắt đầu từ gió\nGió bắt đầu từ đâu?\nEm cũng không biết nữa\nKhi nào ta yêu nhau.",
-    "Trăm năm trong cõi người ta\nChữ yêu chữ nghĩa mới là anh em.",
-    "Nắng mưa là chuyện của trời\nTương tư là chuyện của tôi yêu nàng.",
-    "Đôi ta như lửa mới nhen\nNhư trăng mới mọc, như đèn mới khơi.",
-    "Yêu anh không biết để đâu\nĐể trong túi áo lâu lâu lại nhìn."
+# KHO THƠ KHỊA ĐỘC QUYỀN
+KHO_THO_KHIA = [
+    "Trẻ trâu lướt mạng suốt ngày\nMẹ gọi nấu cơm thì giả vờ say.",
+    "Học hành thì chẳng ra chi\nLên mạng cào phím làm gì hả con?",
+    "Thùng rỗng thì kêu rất to\nĐầu không có chữ chỉ lo thể hiện.",
+    "Đời còn dài lắm ai ơi\nBớt bớt khua môi kẻo đời vả cho.",
+    "Cào phím thì rõ là nhanh\nĐến khi học toán mắt lanh chanh sầu.",
+    "Ra đường tinh tướng anh hào\nVề nhà sợ mẹ cầm cào rượt quanh."
 ]
 
 def load_memory():
@@ -84,7 +88,7 @@ def load_memory():
 
 def save_memory(memory_data):
     global group_memory
-    with memory_lock:
+    with memory_lock:  # Đảm bảo Thread-safe tuyệt đối khi ghi file
         try:
             group_memory = memory_data[-MAX_MEMORY_KEYS:]
             with open(MEMORY_FILE, "w", encoding="utf-8") as f: 
@@ -126,8 +130,7 @@ def delay_delete(chat_id, message_id, delay=DELETE_DELAY):
     Thread(target=del_w, daemon=True).start()
 
 def is_allowed_chat(m):
-    if m.chat.id == ALLOWED_GROUP_ID: return True
-    return False
+    return m.chat.id == ALLOWED_GROUP_ID
 
 def is_admin(m):
     return m.from_user.id == ADMIN_ID
@@ -137,7 +140,6 @@ def clean_dynamic_text(text):
     clean_text = re.sub(r'[_*`\[\]()]', '', clean_text)
     return clean_text.strip()
 
-# Kiểm tra chống spam tin nhắn liên tục
 def check_antispam(m):
     if is_admin(m): return False
     uid = m.from_user.id
@@ -146,14 +148,13 @@ def check_antispam(m):
     if uid not in SPAM_LOGS:
         SPAM_LOGS[uid] = []
         
-    # Lọc lại các mốc thời gian trong khoảng cửa sổ kiểm tra
     SPAM_LOGS[uid] = [t for t in SPAM_LOGS[uid] if now - t < SPAM_WINDOW]
     SPAM_LOGS[uid].append(now)
     
     if len(SPAM_LOGS[uid]) > MAX_MESSAGES:
         try:
             bot.delete_message(m.chat.id, m.message_id)
-            warn = bot.send_message(m.chat.id, f"⚠️ Anh <b>{html.escape(m.from_user.first_name)}</b> ơi, nhắn chậm thôi kẻo trôi bài của em nha...", parse_mode="HTML")
+            warn = bot.send_message(m.chat.id, f"⚠️ Thằng lỏ <b>{html.escape(m.from_user.first_name)}</b> kia! Cào bàn phím chậm thôi không tao vả gãy răng bây giờ, spam trôi hết bài!", parse_mode="HTML")
             delay_delete(m.chat.id, warn.message_id, 10)
         except: pass
         return True
@@ -165,7 +166,7 @@ def check_and_delete_tele_link(m):
     if TELE_LINK_PATTERN.search(text_to_check):
         try:
             bot.delete_message(m.chat.id, m.message_id)
-            warn_msg = ask_ai("Phát hiện link rác quảng cáo bẩn. Hãy nhắc nhở nhẹ nhàng vì em sợ bẩn nhóm.")
+            warn_msg = ask_ai("Phát hiện một thằng rác rưởi quăng link quảng cáo bẩn vô nhóm. Hãy chửi thẳng mặt nó thật gắt.")
             delay_delete(m.chat.id, bot.send_message(m.chat.id, f"⚠️ {html.escape(warn_msg)}", parse_mode="HTML").message_id, 30)
         except: pass
         return True
@@ -174,9 +175,12 @@ def check_and_delete_tele_link(m):
 def ask_ai(prompt):
     global current_key_index, group_memory
     group_memory.append({"role": "user", "content": prompt})
+    
+    # SYSTEM PROMPT: CHẾ ĐỘ CHỬI KHỊA TRẺ TRÂU AUTO THẤM
     sys_content = (
-        "Bạn là em gái 18 tuổi xinh xắn, ngọt ngào. Gọi đối phương là 'anh', xưng 'em'. "
-        "Nói năng nũng nịu, lễ phép, dưới 15 từ, không emoji."
+        "Bạn là một kẻ cọc cằn, đanh đá, chuyên đi khịa và chửi xéo lũ trẻ trâu ảo tưởng sức mạnh trên mạng. "
+        "Ăn nói gắt gỏng, thô lỗ nhưng cực kỳ thấm, dùng từ ngữ góc cạnh, xưng 'tao' gọi 'mày' hoặc 'thằng lỏ'. "
+        "Trả lời cực kỳ ngắn gọn dưới 15 từ, tuyệt đối không dùng emoji."
     )
     messages = [{"role": "system", "content": sys_content}] + group_memory[-MAX_MEMORY_KEYS:]
     
@@ -199,7 +203,7 @@ def ask_ai(prompt):
         except: pass
         AI_KEYS[current_key_index]["status"] = False
         current_key_index = (current_key_index + 1) % len(AI_KEYS)
-    return "Em hơi mệt, anh đợi xíu nha..."
+    return "Tao đang bận chửi đứa khác, tí quay lại nói chuyện với mày sau!"
 
 @bot.message_handler(content_types=['document'])
 def handle_incoming_file(m):
@@ -210,18 +214,18 @@ def handle_incoming_file(m):
     
     uid, cur_time = m.from_user.id, time.time()
     if uid in ai_cooldowns and (cur_time - ai_cooldowns[uid]) < AI_COOLDOWN_TIME:
-        return delay_delete(m.chat.id, bot.reply_to(m, "Anh gửi file nhanh quá em đọc không kịp nè", parse_mode="HTML").message_id, 5)
+        return delay_delete(m.chat.id, bot.reply_to(m, "Gửi file dồn dập thế định khủng bố bố mày à? Tí rảnh tao xem!", parse_mode="HTML").message_id, 5)
     if m.document.file_size > 500000: 
-        return delay_delete(m.chat.id, bot.reply_to(m, "File này nặng quá, em không tải nổi đâu", parse_mode="HTML").message_id, 5)
+        return delay_delete(m.chat.id, bot.reply_to(m, "File nặng vcl, giữ lấy mà xài chứ bộ nhớ tao không chứa rác.", parse_mode="HTML").message_id, 5)
 
-    loading = bot.reply_to(m, "Anh đợi em xem file xíu nha", parse_mode="HTML")
+    loading = bot.reply_to(m, "Đợi tí xem cái đống mã nguồn rác rưởi của mày có gì nào...", parse_mode="HTML")
     ai_cooldowns[uid] = cur_time
     def process_file():
         try:
             content = bot.download_file(bot.get_file(m.document.file_id).file_path).decode('utf-8', errors='ignore')
-            res = ask_ai(f"Mã nguồn của anh {m.from_user.first_name}:\n{content}")
+            res = ask_ai(f"Mã nguồn của thằng {m.from_user.first_name}:\n{content}")
             bot.delete_message(m.chat.id, loading.message_id)
-            delay_delete(m.chat.id, bot.reply_to(m, f"Anh yêu ơi:\n{html.escape(res)}", parse_mode="HTML").message_id)
+            delay_delete(m.chat.id, bot.reply_to(m, f"Nghe tao phán nè thằng lỏ:\n{html.escape(res)}", parse_mode="HTML").message_id)
         except: pass
     Thread(target=process_file, daemon=True).start()
 
@@ -231,7 +235,7 @@ def start(m):
     if check_antispam(m): return
     if check_and_delete_tele_link(m): return
     save_active_user(m.from_user.id, m.from_user.first_name)
-    text = "<b>Em gái nhỏ sẵn sàng phục vụ các anh!</b>\nAnh cứ dán link TikTok vào nhóm, em tự tải video không logo về cho.\n/tym [link] : Chạy ngầm buff tim.\n/stop : Dừng luồng ngầm nha anh."
+    text = "<b>Bố đời thiên hạ đã kích hoạt! Chế độ chửi trẻ trâu mở 24/7!</b>\nQuăng link TikTok vào đây tao tải video không logo cho bớt ngứa mắt.\n/tym [link] : Chạy ngầm buff tim.\n/stop : Bật chế độ câm lặng cho tiến trình ngầm."
     delay_delete(m.chat.id, bot.reply_to(m, text, parse_mode="HTML").message_id)
 
 @bot.message_handler(commands=['tym'])
@@ -243,21 +247,21 @@ def tym_handler(m):
     
     parts = m.text.strip().split(maxsplit=1)
     if len(parts) < 2:
-        return delay_delete(m.chat.id, bot.reply_to(m, "Sai cú pháp rồi anh ơi. Dùng: /tym [link_tiktok]", parse_mode="HTML").message_id, 5)
+        return delay_delete(m.chat.id, bot.reply_to(m, "Mắt mù à? Dùng đúng cú pháp giùm: /tym [link_tiktok]", parse_mode="HTML").message_id, 5)
         
     target_url = parts[1].strip()
     uid = m.from_user.id
     if auto_running.get(f"{uid}_tym", False):
-        return delay_delete(m.chat.id, bot.reply_to(m, "Tiến trình buff tim đang chạy rồi nè anh.", parse_mode="HTML").message_id, 5)
+        return delay_delete(m.chat.id, bot.reply_to(m, "Nôn nóng cái gì, tiến trình đang chạy sấp mặt rồi!", parse_mode="HTML").message_id, 5)
         
     auto_running[f"{uid}_tym"] = True
-    delay_delete(m.chat.id, bot.reply_to(m, "Em bắt đầu chạy buff tim ngầm cho anh rồi đó!", parse_mode="HTML").message_id, 5)
+    delay_delete(m.chat.id, bot.reply_to(m, "Rồi rồi, tao đang đi buff tim ngầm cho mày rồi đó thằng lỏ mạng!", parse_mode="HTML").message_id, 5)
     Thread(target=tym_worker, args=(uid, target_url, m.chat.id), daemon=True).start()
 
 @bot.message_handler(commands=['stop'])
 def stop(m):
     if not is_allowed_chat(m) or not is_admin(m):
-        try: bot.reply_to(m, "Anh không phải sếp em nên em không nghe đâu", parse_mode="HTML")
+        try: bot.reply_to(m, "Mày không phải sếp tao, sủa tiếp đi tao éo nghe đâu!", parse_mode="HTML")
         except: pass
         return
     if check_antispam(m): return
@@ -267,9 +271,9 @@ def stop(m):
     tym_active = auto_running.get(f"{uid}_tym", False)
     if tym_active:
         auto_running[f"{uid}_tym"] = False
-        delay_delete(m.chat.id, bot.reply_to(m, "Em đã dừng toàn bộ các tiến trình chạy ngầm rồi nha.", parse_mode="HTML").message_id, 5)
+        delay_delete(m.chat.id, bot.reply_to(m, "Tao đã dập tắt toàn bộ các luồng chạy ngầm rồi nhé.", parse_mode="HTML").message_id, 5)
     else:
-        delay_delete(m.chat.id, bot.reply_to(m, "Hiện tại em đâu có chạy tiến trình nào đâu anh.", parse_mode="HTML").message_id, 5)
+        delay_delete(m.chat.id, bot.reply_to(m, "Có luồng nào đang chạy đâu mà bắt tao dừng? Tháo não ra à?", parse_mode="HTML").message_id, 5)
 
 @bot.message_handler(func=lambda m: m.chat.id == ALLOWED_GROUP_ID and m.text)
 def handle_text_messages(m):
@@ -285,7 +289,7 @@ def handle_text_messages(m):
 
     uid, cur_time = m.from_user.id, time.time()
     if uid in ai_cooldowns and (cur_time - ai_cooldowns[uid]) < 3: 
-        return delay_delete(m.chat.id, bot.reply_to(m, "Anh nhắn nhanh quá, đợi em rep xíu nha", parse_mode="HTML").message_id, 3)
+        return delay_delete(m.chat.id, bot.reply_to(m, "Nhắn lắm thế, câm mồm vài giây đợi tao load dữ liệu!", parse_mode="HTML").message_id, 3)
 
     try: bot.send_chat_action(m.chat.id, 'typing')
     except: pass
@@ -308,7 +312,7 @@ def welcome_new_member(m):
         for u in m.new_chat_members: 
             if u.id == BOT_INFO.id: continue
             save_active_user(u.id, u.first_name)
-            text = f"🌸 Em chào anh <a href='tg://user?id={u.id}'>{html.escape(u.first_name)}</a> đã vào nhóm chơi với tụi em nha!\n<i>(Tin nhắn tự hủy sau 30s)</i>"
+            text = f"🔥 Thêm một thành viên mới tên là <a href='tg://user?id={u.id}'>{html.escape(u.first_name)}</a> vừa vào xới bạc. Vào đây xem tao khịa tụi trẻ trâu nè con!\n<i>(Xóa sau 30s)</i>"
             delay_delete(m.chat.id, bot.send_message(m.chat.id, text, parse_mode="HTML").message_id, 30)
 
 @bot.message_handler(content_types=['left_chat_member'])
@@ -316,7 +320,7 @@ def goodbye_member(m):
     if is_allowed_chat(m):
         u = m.left_chat_member
         if u.id == BOT_INFO.id: return
-        text = f"🍂 Anh <a href='tg://user?id={u.id}'>{html.escape(u.first_name)}</a> vừa rời nhóm mất rồi... Em tạm biệt anh nhé, giữ gìn sức khỏe nha anh!\n<i>(Tin nhắn tự hủy sau 30s)</i>"
+        text = f"🍂 Thằng lỏ <a href='tg://user?id={u.id}'>{html.escape(u.first_name)}</a> chịu nhiệt không nổi đã cút khỏi nhóm rồi... Tiễn vong nha con!\n<i>(Xóa sau 30s)</i>"
         delay_delete(m.chat.id, bot.send_message(m.chat.id, text, parse_mode="HTML").message_id, 30)
 
 def download_and_send_video(url, chat_id, reply_id):
@@ -325,7 +329,7 @@ def download_and_send_video(url, chat_id, reply_id):
         res = http_session.get(api_url, timeout=10).json()
         if res.get("code") == 0:
             video_res = http_session.get(res["data"].get("play"), timeout=25)
-            msg = bot.send_video(chat_id, io.BytesIO(video_res.content), reply_to_message_id=reply_id, caption="Của anh nè (Xóa sau 30s)", parse_mode="HTML")
+            msg = bot.send_video(chat_id, io.BytesIO(video_res.content), reply_to_message_id=reply_id, caption="Của mày nè, xem xong thì câm mồm giùm (Xóa sau 30s)", parse_mode="HTML")
             delay_delete(chat_id, msg.message_id, 30)
     except: pass
 
@@ -341,11 +345,14 @@ def tym_worker(uid, raw_tiktok_url, chat_id):
                 resp = http_session.get(target_endpoint, headers={"User-Agent": "Mozilla/5.0"}, timeout=12)
                 t = datetime.now(VN_TZ).strftime("%H:%M - %d/%m")
                 if resp.status_code == 200:
-                    msg = bot.send_message(chat_id, f"⚡ <b>[BUFF TYM THÀNH CÔNG RỒI ANH]</b>\nRequest thành công\nThời gian: {t}", parse_mode="HTML")
+                    msg = bot.send_message(chat_id, f"⚡ <b>[BUFF TIM XONG RỒI THẰNG LỎ]</b>\nRequest thành công, sướng nhé!\nThời gian: {t}", parse_mode="HTML")
                 else:
-                    msg = bot.send_message(chat_id, f"❌ API tym báo lỗi rồi: {resp.status_code}")
+                    msg = bot.send_message(chat_id, f"❌ API buff tim báo lỗi rồi: {resp.status_code}")
                 delay_delete(chat_id, msg.message_id, 30)
-        except: pass
+        except Exception as e:
+            print(f"[LỖI WORKER]: {e}")
+        
+        # ĐÃ VÁ LỖI: Đưa luồng ngủ ra ngoài khối try-except để chắc chắn bot dừng 10 phút, tránh lặp vô hạn gây cháy CPU
         for _ in range(AUTO_DELAY):
             if not auto_running.get(f"{uid}_tym", False): return
             time.sleep(1)
@@ -358,7 +365,7 @@ def scheduled_time_worker():
             if now.minute == 0 and now.hour != last_sent_hour:
                 target_id, target_name = get_random_user()
                 if target_id:
-                    text = f"🔔 <b>{now.strftime('%H:%M')}</b>\nAnh <a href='tg://user?id={target_id}'>{html.escape(target_name)}</a> ơi... {random.choice(KHO_THINH)}\n<i>(Xóa sau 15s)</i>"
+                    text = f"🔔 <b>Đúng {now.strftime('%H:%M')} rồi!</b>\nThằng lỏ <a href='tg://user?id={target_id}'>{html.escape(target_name)}</a> ơi... Nghe tao bảo này: {random.choice(KHO_KHIA)}\n<i>(Tự hủy sau 15s)</i>"
                     delay_delete(ALLOWED_GROUP_ID, bot.send_message(ALLOWED_GROUP_ID, text, parse_mode="HTML").message_id, 15)
                 last_sent_hour = now.hour
             if now.minute != 0: last_sent_hour = -1
@@ -367,16 +374,16 @@ def scheduled_time_worker():
 
 def auto_poem_worker():
     while True:
-        time.sleep(3600)
+        time.sleep(3600)  # Cứ mỗi tiếng khịa một bài thơ
         try:
-            tho = random.choice(KHO_THO)
-            text = f"🌸 <b>Gửi tặng các anh một câu thơ:</b>\n\n<i>{tho}</i>\n\n<i>(Em tự xóa sau 15s nha)</i>"
+            tho = random.choice(KHO_THO_KHIA)
+            text = f"🌸 <b>Gửi tặng lũ trẻ trâu trong nhóm một bài thơ tỉnh ngộ:</b>\n\n<i>{tho}</i>\n\n<i>(Tao tự xóa sau 15s cho đỡ rác nhóm)</i>"
             msg = bot.send_message(ALLOWED_GROUP_ID, text, parse_mode="HTML")
             delay_delete(ALLOWED_GROUP_ID, msg.message_id, 15)
         except: pass
 
 if __name__ == "__main__":
-    print("Em gái nhỏ đã cài thêm lớp bảo vệ nhóm chống spam...")
+    print("Bot chửi trẻ trâu đã khởi động thành công và đang quét mục tiêu...")
     Thread(target=scheduled_time_worker, daemon=True).start()
     Thread(target=auto_poem_worker, daemon=True).start()
     bot.infinity_polling(timeout=60, none_stop=True)
