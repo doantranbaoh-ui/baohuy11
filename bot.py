@@ -116,7 +116,7 @@ class Brain:
 brain = Brain()
 
 # ==================== CẤU HÌNH ====================
-TOKEN = os.getenv("BOT_TOKEN", "8080338995:AAFt2FiCfDdmVB01ybOsdum7iQd3400OCfo")
+TOKEN = os.getenv("BOT_TOKEN", "8080338995:AAEL2qb-TMjjUmoSvG1bWuY5M1QFST_zdJ4")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "5736655322"))
 GROUP_ID = int(os.getenv("GROUP_ID", "-1003925717296"))
 
