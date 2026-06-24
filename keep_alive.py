@@ -1,18 +1,41 @@
-from threading import Thread
-from flask import Flask
+# -*- coding: utf-8 -*-
+# keep_alive.py - Dành cho Render.com
+# Tạo web server ảo để Render không kill service
 
-app = Flask('')
+from flask import Flask
+from threading import Thread
+import os
+
+app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot đang chạy ngon lành! 🚀"
+    return """
+    <html>
+    <head><title>Não Robot - Alive</title></head>
+    <body style="background:#0a0a0a;color:#00ff00;font-family:monospace;text-align:center;padding-top:100px;">
+        <h1>🧠 NÃO ROBOT</h1>
+        <p>Status: <span style="color:#00ff00;">● ONLINE</span></p>
+        <p>RAM: <span id="ram">...</span></p>
+        <script>setInterval(()=>{document.getElementById('ram').textContent=(performance.memory?.usedJSHeapSize/1024/1024||0).toFixed(1)+' MB'},1000);</script>
+    </body>
+    </html>
+    """
 
-def run_web_server():
-    # Khởi chạy Flask ở cổng 8080
-    app.run(host='0.0.0.0', port=8080)
+@app.route('/health')
+def health():
+    return 'OK', 200
+
+@app.route('/ping')
+def ping():
+    return 'PONG', 200
+
+def run():
+    """Chạy Flask server trên port từ biến môi trường PORT (mặc định 10000)."""
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
 
 def keep_alive():
-    """Hàm khởi chạy Web Server trên một luồng phụ tách biệt với Bot"""
-    t = Thread(target=run_web_server)
-    t.daemon = True
+    """Hàm chính để gọi từ bot.py."""
+    t = Thread(target=run, daemon=True)
     t.start()
