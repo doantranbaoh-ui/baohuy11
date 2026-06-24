@@ -1,22 +1,10 @@
-# ╔══════════════════════════════════════════════════════════════╗
-# ║  NÃO ROBOT - REQUIREMENTS CHO RENDER                        ║
-# ╚══════════════════════════════════════════════════════════════╝
-
-# Core
 pyTelegramBotAPI==4.22.0
 requests==2.31.0
 pytz==2024.1
-
-# Web server cho Render (bắt buộc)
 flask==3.0.0
 gunicorn==21.2.0
-
-# RAM Manager
 psutil==5.9.8
-
-# File Processing (tùy chọn)
 PyPDF2==3.0.1
 python-docx==1.1.2
 beautifulsoup4==4.12.3
 chardet==5.2.0
-lxml==5.1.0
