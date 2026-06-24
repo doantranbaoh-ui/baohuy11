@@ -3,3 +3,11 @@ requests
 pytz
 Flask
 urllib3
+psutil
+lxml
+chardet
+beautifulsoup4
+python-docx
+gTTS
+edge-tts
+pyttsx3
