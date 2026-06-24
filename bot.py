@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # ┌────────────────────────────────────────────────────────────────────────┐
-# │                    NÃO ROBOT - AUDIO VOICE ĐÃ FIX                       │
-# │  Phiên bản sửa lỗi TTS: hỗ trợ edge-tts, gTTS, pyttsx3 (offline)      │
+# │                    NÃO ROBOT - TTS GOOGLE TRANSLATE TRỰC TIẾP           │
+# │  2000 dòng - Không phụ thuộc edge-tts/gTTS/pyttsx3                     │
 # │  Tác giả: palofsc (palo)  |  Ngày: 2026-06-24                          │
 # └────────────────────────────────────────────────────────────────────────┘
 import sys
@@ -21,6 +21,8 @@ import base64
 import tempfile
 import asyncio
 import traceback
+import urllib.parse
+import urllib.request
 from threading import Thread, Lock, Event, Timer
 from datetime import datetime, timedelta
 from collections import deque, defaultdict, OrderedDict
@@ -37,7 +39,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("NaoRobot")
 
-# ─── ENCODING ──────────────────────────────────────────────────────────────
+# ─── ENCODING UTF-8 ────────────────────────────────────────────────────────
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
@@ -56,63 +58,17 @@ import requests
 import pytz
 
 # ╔══════════════════════════════════════════════════════════════╗
-# ║  PHÁT HIỆN & KHỞI TẠO THƯ VIỆN TTS                         ║
-# ╚══════════════════════════════════════════════════════════════╝
-
-# --- edge-tts (giọng Việt online, tốt nhất) ---
-HAS_EDGE_TTS = False
-try:
-    import edge_tts
-    # Kiểm tra thử xem có import được không
-    test_voices = asyncio.run(edge_tts.list_voices())
-    vi_voices = [v for v in test_voices if v["Locale"] == "vi-VN"]
-    if vi_voices:
-        HAS_EDGE_TTS = True
-        logger.info(f"edge-tts đã sẵn sàng ({len(vi_voices)} giọng vi-VN).")
-    else:
-        logger.warning("edge-tts không có giọng vi-VN.")
-except Exception as e:
-    logger.warning(f"edge-tts không khả dụng: {e}")
-
-# --- gTTS (Google Text-to-Speech online) ---
-HAS_GTTS = False
-try:
-    from gtts import gTTS
-    # Kiểm tra nhanh
-    test_tts = gTTS(text="test", lang="vi")
-    HAS_GTTS = True
-    logger.info("gTTS đã sẵn sàng.")
-except Exception as e:
-    logger.warning(f"gTTS không khả dụng: {e}")
-
-# --- pyttsx3 (offline, không cần mạng) ---
-HAS_PYTTSX3 = False
-try:
-    import pyttsx3
-    # Khởi tạo engine để kiểm tra
-    test_engine = pyttsx3.init()
-    voices = test_engine.getProperty('voices')
-    if voices:
-        HAS_PYTTSX3 = True
-        logger.info(f"pyttsx3 đã sẵn sàng ({len(voices)} giọng).")
-    else:
-        logger.warning("pyttsx3 không có giọng nào.")
-    test_engine.stop()
-except Exception as e:
-    logger.warning(f"pyttsx3 không khả dụng: {e}")
-
-# Nếu không có cái nào thì cảnh báo
-if not HAS_EDGE_TTS and not HAS_GTTS and not HAS_PYTTSX3:
-    logger.critical("KHÔNG CÓ THƯ VIỆN TTS NÀO! Cài: pip install edge-tts gtts pyttsx3")
-
-# ╔══════════════════════════════════════════════════════════════╗
 # ║  NÃO (BRAIN) - LỚP ĐIỀU KHIỂN TRUNG TÂM                    ║
 # ╚══════════════════════════════════════════════════════════════╝
 class Brain:
+    """
+    Não điều khiển bot: tự học, tự điều chỉnh mood, tự sửa lỗi.
+    Quyết định mức độ chửi và chế độ hoạt động.
+    """
     def __init__(self, save_path: str = "brain.json"):
         self.save_path = save_path
-        self.state: str = "normal"
-        self.mood: int = 0
+        self.state: str = "normal"          # normal | aggressive | sleep | repair
+        self.mood: int = 0                   # -10 đến 10
         self.learned: defaultdict = defaultdict(int)
         self.banned_words: set = set()
         self.trusted_users: set = set()
@@ -133,6 +89,7 @@ class Brain:
         self.load_state()
 
     def load_state(self) -> None:
+        """Tải trạng thái từ file JSON."""
         if os.path.exists(self.save_path):
             try:
                 with open(self.save_path, "r", encoding="utf-8") as f:
@@ -150,6 +107,7 @@ class Brain:
                 logger.error(f"Lỗi tải não: {e}")
 
     def save_state(self) -> None:
+        """Lưu trạng thái xuống file JSON (thread-safe)."""
         with self.file_lock:
             self.stats["last_save"] = time.time()
             try:
@@ -168,6 +126,7 @@ class Brain:
                 logger.error(f"Lỗi lưu não: {e}")
 
     def think(self, context: Dict[str, Any]) -> str:
+        """Phân tích ngữ cảnh và cập nhật mood, học từ."""
         uid = context.get("uid")
         txt = context.get("txt", "")
         self.stats["msg_processed"] += 1
@@ -198,6 +157,7 @@ class Brain:
         return self.state
 
     def should_reply(self, uid: int, msg_text: str) -> bool:
+        """Quyết định có trả lời hay không."""
         if uid in self.trusted_users:
             return True
         if self.learned.get(msg_text.lower(), 0) > 5:
@@ -205,6 +165,7 @@ class Brain:
         return random.random() > 0.1
 
     def get_insult_level(self) -> str:
+        """Mức độ chửi dựa trên mood và state."""
         if self.state == "aggressive":
             return "extreme"
         elif self.mood < 0:
@@ -212,6 +173,7 @@ class Brain:
         return "normal"
 
     def health_check(self) -> str:
+        """Kiểm tra sức khỏe định kỳ (5 phút)."""
         now = time.time()
         if now - self.last_health_check > 300:
             self.last_health_check = now
@@ -253,7 +215,7 @@ voice_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="Voice")
 download_executor = ThreadPoolExecutor(max_workers=10, thread_name_prefix="Download")
 
 # ╔══════════════════════════════════════════════════════════════╗
-# ║  AI KEYS (TỰ SỬA)                                          ║
+# ║  AI KEYS (TỰ SỬA KHI LỖI)                                  ║
 # ╚══════════════════════════════════════════════════════════════╝
 AI_KEYS: List[Dict[str, Any]] = [
     {
@@ -286,7 +248,7 @@ ck_idx = 0
 ck_lock = Lock()
 
 # ╔══════════════════════════════════════════════════════════════╗
-# ║  KHO CHỬI                                                  ║
+# ║  KHO CHỬI (THEO MỨC ĐỘ)                                   ║
 # ╚══════════════════════════════════════════════════════════════╝
 KHO_NORMAL = [
     "Mồm thối, câm đi.", "Não bã đậu, im lặng.", "Thùng rỗng kêu to.",
@@ -308,6 +270,7 @@ KHO_EXTREME = [
 ]
 
 def get_kho() -> List[str]:
+    """Lấy kho chửi phù hợp với tâm trạng hiện tại."""
     lvl = brain.get_insult_level()
     if lvl == "extreme":
         return KHO_EXTREME
@@ -329,6 +292,7 @@ vote_active: Dict[int, Dict] = {}
 USR_FILE = "usr.json"
 RULES_FILE = "rules.txt"
 
+# ─── REGEX ────────────────────────────────────────────────────────────────
 TIKTOK_LINK = re.compile(r'https?://(?:vm|vt|www|m)\.tiktok\.com/\S+', re.I)
 TELEGRAM_LINK = re.compile(r'(https?://)?(www\.)?(t\.me|telegram\.me|telegram\.org|tg\.me)/[a-zA-Z0-9_]{5,}|@[a-zA-Z0-9_]{5,}', re.I)
 
@@ -336,6 +300,7 @@ TELEGRAM_LINK = re.compile(r'(https?://)?(www\.)?(t\.me|telegram\.me|telegram\.o
 # ║  TIỆN ÍCH CHUNG                                            ║
 # ╚══════════════════════════════════════════════════════════════╝
 def load_users() -> Dict[str, str]:
+    """Đọc danh sách người dùng từ file JSON."""
     if os.path.exists(USR_FILE):
         try:
             with open(USR_FILE, 'r', encoding='utf-8') as f:
@@ -345,6 +310,7 @@ def load_users() -> Dict[str, str]:
     return {}
 
 def save_users(data: Dict[str, str]) -> None:
+    """Ghi danh sách người dùng ra file JSON (thread-safe)."""
     with lock:
         try:
             with open(USR_FILE, 'w', encoding='utf-8') as f:
@@ -353,6 +319,7 @@ def save_users(data: Dict[str, str]) -> None:
             logger.error(f"Lỗi save users: {e}")
 
 def del_msg(chat_id: int, msg_id: int, delay: int = 60) -> None:
+    """Xóa tin nhắn sau `delay` giây."""
     def _del():
         time.sleep(delay)
         try:
@@ -362,6 +329,7 @@ def del_msg(chat_id: int, msg_id: int, delay: int = 60) -> None:
     Thread(target=_del, daemon=True).start()
 
 def is_admin(chat_id: int, user_id: int) -> bool:
+    """Kiểm tra user có phải admin không."""
     try:
         admins = bot.get_chat_administrators(chat_id)
         return any(admin.user.id == user_id for admin in admins)
@@ -369,9 +337,11 @@ def is_admin(chat_id: int, user_id: int) -> bool:
         return False
 
 def is_grp(m: telebot.types.Message) -> bool:
+    """Kiểm tra tin nhắn có từ nhóm mục tiêu không."""
     return m.chat.id == GROUP_ID
 
 def extract_user_and_reason(message: telebot.types.Message, bot_username: str) -> Tuple[Optional[int], str]:
+    """Lấy user_id và lý do từ lệnh."""
     target = None
     reason = ""
     if message.reply_to_message:
@@ -401,6 +371,7 @@ def extract_user_and_reason(message: telebot.types.Message, bot_username: str) -
     return target, reason
 
 def parse_duration(reason: str) -> int:
+    """Phân tích thời gian từ lý do (hỗ trợ 1h, 30m, 45s...)."""
     time_match = re.search(r'(\d+)\s*(h|m|s|p)', reason.lower())
     if time_match:
         num = int(time_match.group(1))
@@ -416,24 +387,25 @@ def parse_duration(reason: str) -> int:
     return 3600
 
 # ╔══════════════════════════════════════════════════════════════╗
-# ║  VOICE GENERATION (TTS) - ĐÃ SỬA LỖI                        ║
-# ║  Thứ tự ưu tiên: edge-tts -> gTTS -> pyttsx3               ║
-# ║  Nếu lỗi ở bước nào thì fallback xuống bước dưới           ║
+# ║  GOOGLE TRANSLATE TTS - GIẢI PHÁP TRỰC TIẾP                ║
+# ║  Dùng URL Google Translate để lấy MP3 không cần API key    ║
+# ║  Cơ chế: chia text thành đoạn nhỏ, ghép lại                ║
 # ╚══════════════════════════════════════════════════════════════╝
 
-# Danh sách giọng vi-VN cho edge-tts
-EDGE_VOICES_VI = [
-    "vi-VN-NamNeural",      # Nam
-    "vi-VN-HoaiMyNeural",   # Nữ (Hoài My)
-    "vi-VN-AnNeural",       # Nữ (An)
-    "vi-VN-LanNeural",      # Nữ (Lan)
-    "vi-VN-LinhNeural",     # Nữ (Linh)
-    "vi-VN-QuanNeural",     # Nam (Quân)
-    "vi-VN-KienNeural",     # Nam (Kiên)
-]
+# ─── Hằng số cho Google TTS ────────────────────────────────────────────────
+GOOGLE_TTS_URL = "https://translate.google.com/translate_tts"
+GOOGLE_TTS_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "audio/mpeg, audio/*;q=0.9, */*;q=0.8",
+    "Accept-Language": "vi-VN,vi;q=0.9,en;q=0.8",
+    "Referer": "https://translate.google.com/",
+    "Origin": "https://translate.google.com",
+}
+MAX_CHUNK_SIZE = 180  # Google TTS giới hạn độ dài text mỗi request (khoảng 200 ký tự)
 
 @dataclass
 class VoiceRequest:
+    """Đối tượng yêu cầu tạo voice."""
     chat_id: int
     reply_id: int
     text: str
@@ -441,173 +413,169 @@ class VoiceRequest:
     lang: str = "vi"
     created_at: float = field(default_factory=time.time)
 
-voice_queue: Queue = Queue(maxsize=30)
+voice_queue: Queue = Queue(maxsize=50)
 
-def generate_voice_edge(text: str) -> Optional[io.BytesIO]:
+def fetch_google_tts_chunk(text: str, lang: str = "vi") -> Optional[bytes]:
     """
-    Tạo voice bằng edge-tts.
-    Trả về BytesIO chứa file mp3, hoặc None nếu lỗi.
+    Gửi 1 đoạn text đến Google Translate TTS và lấy file MP3.
+    Trả về bytes của file MP3 hoặc None nếu lỗi.
     """
-    if not HAS_EDGE_TTS:
-        logger.debug("edge-tts không khả dụng, bỏ qua.")
-        return None
+    # Mã hóa tham số URL
+    params = {
+        "ie": "UTF-8",
+        "q": text,
+        "tl": lang,
+        "total": "1",
+        "idx": "0",
+        "textlen": str(len(text)),
+        "client": "tw-ob",       # Client quan trọng: tw-ob = không cần token
+        "prev": "input",
+        "ttsspeed": "1.0"
+    }
+    query_string = urllib.parse.urlencode(params)
+    full_url = f"{GOOGLE_TTS_URL}?{query_string}"
     
-    # Chọn giọng ngẫu nhiên để đa dạng
-    voice_name = random.choice(EDGE_VOICES_VI)
-    logger.info(f"edge-tts: dùng giọng {voice_name}, text={text[:50]}...")
-    
-    temp_path = None
     try:
-        # Tạo file tạm
-        temp_fd, temp_path = tempfile.mkstemp(suffix=".mp3")
-        os.close(temp_fd)
-        
-        # Chạy edge-tts async trong thread
-        async def _gen():
-            communicate = edge_tts.Communicate(text, voice_name)
-            await communicate.save(temp_path)
-        
-        # Tạo event loop mới cho thread này
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(_gen())
-        loop.close()
-        
-        # Đọc file tạm
-        with open(temp_path, 'rb') as f:
-            audio_data = f.read()
-        
-        # Kiểm tra audio có hợp lệ không
-        if len(audio_data) < 100:
-            logger.warning(f"edge-tts: file audio quá nhỏ ({len(audio_data)} bytes).")
-            return None
-        
-        logger.info(f"edge-tts: thành công, {len(audio_data)} bytes.")
-        return io.BytesIO(audio_data)
-        
+        req = urllib.request.Request(full_url, headers=GOOGLE_TTS_HEADERS)
+        with urllib.request.urlopen(req, timeout=15) as response:
+            audio_data = response.read()
+            # Kiểm tra xem có phải MP3 không (kiểm tra magic bytes)
+            if len(audio_data) > 100 and (audio_data[:3] == b'\xff\xfb\x90' or audio_data[:2] == b'\xff\xfb' or audio_data[:3] == b'ID3'):
+                logger.info(f"Google TTS: chunk '{text[:30]}...' thành công ({len(audio_data)} bytes).")
+                return audio_data
+            else:
+                logger.warning(f"Google TTS: chunk '{text[:30]}...' trả về không phải MP3 (len={len(audio_data)}, magic={audio_data[:10].hex()}).")
+                # Thử dùng requests thay thế
+                return _fetch_google_tts_requests(text, lang)
     except Exception as e:
-        logger.error(f"edge-tts lỗi: {e}\n{traceback.format_exc()}")
-        return None
-    finally:
-        # Dọn dẹp file tạm
-        if temp_path and os.path.exists(temp_path):
-            try:
-                os.unlink(temp_path)
-            except:
-                pass
+        logger.error(f"Google TTS urllib lỗi: {e}")
+        # Fallback sang requests
+        return _fetch_google_tts_requests(text, lang)
 
-def generate_voice_gtts(text: str) -> Optional[io.BytesIO]:
-    """
-    Tạo voice bằng gTTS (Google Text-to-Speech).
-    Trả về BytesIO chứa file mp3, hoặc None nếu lỗi.
-    """
-    if not HAS_GTTS:
-        logger.debug("gTTS không khả dụng, bỏ qua.")
-        return None
-    
-    logger.info(f"gTTS: text={text[:50]}...")
+def _fetch_google_tts_requests(text: str, lang: str = "vi") -> Optional[bytes]:
+    """Fallback dùng requests để gọi Google TTS."""
+    params = {
+        "ie": "UTF-8",
+        "q": text,
+        "tl": lang,
+        "total": "1",
+        "idx": "0",
+        "textlen": str(len(text)),
+        "client": "tw-ob",
+        "prev": "input",
+        "ttsspeed": "1.0"
+    }
     try:
-        buf = io.BytesIO()
-        tts = gTTS(text=text, lang="vi", slow=False)
-        tts.write_to_fp(buf)
-        buf.seek(0)
-        
-        # Kiểm tra kích thước
-        audio_data = buf.getvalue()
-        if len(audio_data) < 100:
-            logger.warning(f"gTTS: file audio quá nhỏ ({len(audio_data)} bytes).")
+        resp = ses.get(GOOGLE_TTS_URL, params=params, headers=GOOGLE_TTS_HEADERS, timeout=15)
+        if resp.status_code == 200 and len(resp.content) > 100:
+            logger.info(f"Google TTS (requests): chunk '{text[:30]}...' thành công ({len(resp.content)} bytes).")
+            return resp.content
+        else:
+            logger.warning(f"Google TTS (requests): status={resp.status_code}, len={len(resp.content)}")
             return None
-        
-        logger.info(f"gTTS: thành công, {len(audio_data)} bytes.")
-        return buf
     except Exception as e:
-        logger.error(f"gTTS lỗi: {e}\n{traceback.format_exc()}")
+        logger.error(f"Google TTS requests lỗi: {e}")
         return None
 
-def generate_voice_pyttsx3(text: str) -> Optional[io.BytesIO]:
+def split_text_into_chunks(text: str, max_size: int = MAX_CHUNK_SIZE) -> List[str]:
     """
-    Tạo voice bằng pyttsx3 (offline, không cần mạng).
-    Trả về BytesIO chứa file wav, hoặc None nếu lỗi.
+    Chia văn bản thành các đoạn nhỏ để gửi Google TTS.
+    Ưu tiên cắt ở dấu câu (.,;:!?) để giữ ngữ điệu tự nhiên.
     """
-    if not HAS_PYTTSX3:
-        logger.debug("pyttsx3 không khả dụng, bỏ qua.")
-        return None
+    if len(text) <= max_size:
+        return [text]
     
-    logger.info(f"pyttsx3: text={text[:50]}...")
-    temp_path = None
-    try:
-        # Tạo file tạm
-        temp_fd, temp_path = tempfile.mkstemp(suffix=".wav")
-        os.close(temp_fd)
-        
-        # Khởi tạo engine
-        engine = pyttsx3.init()
-        
-        # Thử đặt giọng tiếng Việt nếu có
-        voices = engine.getProperty('voices')
-        vi_voice = None
-        for voice in voices:
-            if 'viet' in voice.name.lower() or 'vi' in voice.id.lower():
-                vi_voice = voice.id
+    chunks = []
+    # Danh sách dấu phân cách ưu tiên
+    separators = ['. ', '! ', '? ', ', ', '; ', ': ', ' - ', ' – ', '\n', ' ']
+    
+    while len(text) > max_size:
+        # Tìm vị trí cắt tốt nhất trong khoảng max_size
+        best_pos = max_size
+        for sep in separators:
+            # Tìm dấu phân cách gần max_size nhất nhưng không vượt quá
+            pos = text.rfind(sep, 0, max_size)
+            if pos > max_size // 2:  # Chỉ chấp nhận nếu vị trí > 1/2 max_size
+                best_pos = pos + len(sep)
                 break
-        if vi_voice:
-            engine.setProperty('voice', vi_voice)
         
-        # Cấu hình tốc độ
-        engine.setProperty('rate', 150)  # Tốc độ mặc định
+        # Nếu không tìm thấy dấu phân cách phù hợp, cắt cứng ở max_size
+        if best_pos > max_size or best_pos <= max_size // 3:
+            best_pos = max_size
         
-        # Lưu ra file
-        engine.save_to_file(text, temp_path)
-        engine.runAndWait()
-        engine.stop()
-        
-        # Đọc file
-        with open(temp_path, 'rb') as f:
-            audio_data = f.read()
-        
-        if len(audio_data) < 100:
-            logger.warning(f"pyttsx3: file audio quá nhỏ ({len(audio_data)} bytes).")
-            return None
-        
-        logger.info(f"pyttsx3: thành công, {len(audio_data)} bytes.")
-        return io.BytesIO(audio_data)
-        
-    except Exception as e:
-        logger.error(f"pyttsx3 lỗi: {e}\n{traceback.format_exc()}")
-        return None
-    finally:
-        if temp_path and os.path.exists(temp_path):
-            try:
-                os.unlink(temp_path)
-            except:
-                pass
+        chunks.append(text[:best_pos].strip())
+        text = text[best_pos:].strip()
+    
+    if text:
+        chunks.append(text)
+    
+    return chunks
 
-def generate_voice(text: str) -> Tuple[Optional[io.BytesIO], str]:
+def merge_mp3_chunks(chunks: List[bytes]) -> Optional[io.BytesIO]:
     """
-    Tạo voice, thử lần lượt edge-tts -> gTTS -> pyttsx3.
-    Trả về (BytesIO, engine_name) hoặc (None, error_msg).
+    Ghép nhiều đoạn MP3 thành 1 file duy nhất.
+    Dùng phương pháp nối bytes đơn giản (hoạt động với MP3 CBR).
     """
-    # Bước 1: Thử edge-tts (tốt nhất)
-    logger.info("Thử edge-tts...")
-    audio = generate_voice_edge(text)
-    if audio:
-        return audio, "edge-tts"
+    if not chunks:
+        return None
     
-    # Bước 2: Fallback gTTS
-    logger.info("edge-tts thất bại, thử gTTS...")
-    audio = generate_voice_gtts(text)
-    if audio:
-        return audio, "gTTS"
+    if len(chunks) == 1:
+        buf = io.BytesIO(chunks[0])
+        buf.seek(0)
+        return buf
     
-    # Bước 3: Fallback pyttsx3 (offline)
-    logger.info("gTTS thất bại, thử pyttsx3 (offline)...")
-    audio = generate_voice_pyttsx3(text)
-    if audio:
-        return audio, "pyttsx3"
+    # Nối tất cả chunks (MP3 frame có thể nối trực tiếp)
+    merged = b"".join(chunks)
+    buf = io.BytesIO(merged)
+    buf.seek(0)
+    logger.info(f"Đã ghép {len(chunks)} chunks MP3 thành công ({len(merged)} bytes).")
+    return buf
+
+def generate_voice_google(text: str, lang: str = "vi") -> Tuple[Optional[io.BytesIO], str]:
+    """
+    Tạo voice bằng Google Translate TTS trực tiếp.
+    Trả về (BytesIO, message) hoặc (None, error_msg).
+    """
+    # Bước 1: Làm sạch text (loại bỏ ký tự đặc biệt gây lỗi URL)
+    clean_text = re.sub(r'[<>"\'{}|\\^~\[\]`]', '', text)
+    clean_text = re.sub(r'\s+', ' ', clean_text).strip()
     
-    # Tất cả đều thất bại
-    logger.error("TẤT CẢ CÁC ENGINE TTS ĐỀU THẤT BẠI!")
-    return None, "all_failed"
+    if not clean_text:
+        return None, "Text rỗng sau khi làm sạch."
+    
+    logger.info(f"Google TTS: bắt đầu xử lý text dài {len(clean_text)} ký tự.")
+    
+    # Bước 2: Chia thành các đoạn nhỏ
+    chunks = split_text_into_chunks(clean_text)
+    logger.info(f"Google TTS: chia thành {len(chunks)} chunks.")
+    
+    # Bước 3: Gửi từng đoạn và thu thập MP3
+    audio_chunks = []
+    failed_chunks = 0
+    
+    for i, chunk in enumerate(chunks):
+        logger.info(f"Google TTS: xử lý chunk {i+1}/{len(chunks)}: '{chunk[:40]}...'")
+        audio_data = fetch_google_tts_chunk(chunk, lang)
+        if audio_data:
+            audio_chunks.append(audio_data)
+        else:
+            failed_chunks += 1
+            logger.warning(f"Google TTS: chunk {i+1} thất bại.")
+    
+    # Bước 4: Kiểm tra kết quả
+    if not audio_chunks:
+        return None, "Tất cả chunks đều thất bại."
+    
+    if failed_chunks > len(chunks) // 2:
+        return None, f"Quá nhiều chunks thất bại ({failed_chunks}/{len(chunks)})."
+    
+    # Bước 5: Ghép các đoạn MP3
+    merged = merge_mp3_chunks(audio_chunks)
+    if merged:
+        logger.info(f"Google TTS: thành công! {len(audio_chunks)}/{len(chunks)} chunks, {len(merged.getvalue())} bytes.")
+        return merged, "ok"
+    else:
+        return None, "Không thể ghép các chunks MP3."
 
 def voice_worker() -> None:
     """Worker xử lý hàng đợi voice liên tục."""
@@ -617,10 +585,7 @@ def voice_worker() -> None:
             if req is None:
                 continue
             
-            # Giới hạn độ dài text (tối đa 400 ký tự để tránh lỗi)
-            voice_text = req.text[:400].strip()
-            
-            # Nếu text rỗng sau khi strip thì báo lỗi
+            voice_text = req.text[:500].strip()
             if not voice_text:
                 bot.send_message(
                     req.chat_id,
@@ -630,63 +595,89 @@ def voice_worker() -> None:
                 voice_queue.task_done()
                 continue
             
-            logger.info(f"Đang tạo voice cho '{req.user_name}': {voice_text[:50]}...")
+            logger.info(f"Voice worker: xử lý yêu cầu từ '{req.user_name}': '{voice_text[:50]}...'")
             
-            # Gửi tin nhắn đang xử lý
-            status_msg = bot.send_message(
-                req.chat_id,
-                f"🎙️ Đang tạo giọng nói cho <b>{html.escape(req.user_name)}</b>...",
-                parse_mode="HTML"
-            )
+            # Gửi tin nhắn trạng thái
+            try:
+                status_msg = bot.send_message(
+                    req.chat_id,
+                    f"🎙️ Đang tạo giọng nói cho <b>{html.escape(req.user_name)}</b>...",
+                    parse_mode="HTML"
+                )
+            except:
+                status_msg = None
             
-            # Tạo voice
-            audio, engine = generate_voice(voice_text)
+            # Tạo voice bằng Google Translate TTS
+            audio, result_msg = generate_voice_google(voice_text, req.lang)
             
             # Xóa tin nhắn trạng thái
-            try:
-                bot.delete_message(req.chat_id, status_msg.message_id)
-            except:
-                pass
+            if status_msg:
+                try:
+                    bot.delete_message(req.chat_id, status_msg.message_id)
+                except:
+                    pass
             
-            if audio and engine != "all_failed":
-                # Gửi file audio
-                ext = "mp3" if engine != "pyttsx3" else "wav"
-                audio.name = f"voice_{req.user_name}_{int(time.time())}.{ext}"
-                
+            if audio and result_msg == "ok":
+                audio.name = f"voice_{req.user_name}_{int(time.time())}.mp3"
                 caption = (
                     f"🎙️ <b>{html.escape(req.user_name)}</b> nói:\n"
                     f"<i>{html.escape(voice_text[:200])}</i>\n"
-                    f"<code>Engine: {engine}</code>"
+                    f"<code>Engine: Google Translate TTS</code>"
                 )
-                
-                bot.send_voice(
-                    req.chat_id,
-                    audio,
-                    reply_to_message_id=req.reply_id,
-                    caption=caption,
-                    parse_mode="HTML"
-                )
-                brain.stats["voice_generated"] += 1
-                logger.info(f"Voice đã gửi thành công ({engine}).")
+                try:
+                    bot.send_voice(
+                        req.chat_id,
+                        audio,
+                        reply_to_message_id=req.reply_id,
+                        caption=caption,
+                        parse_mode="HTML"
+                    )
+                    brain.stats["voice_generated"] += 1
+                    logger.info(f"Voice đã gửi thành công cho {req.user_name}.")
+                except Exception as e:
+                    logger.error(f"Lỗi gửi voice: {e}")
+                    # Thử gửi lại dạng audio (không phải voice)
+                    try:
+                        audio.seek(0)
+                        bot.send_audio(
+                            req.chat_id,
+                            audio,
+                            reply_to_message_id=req.reply_id,
+                            caption=caption,
+                            parse_mode="HTML",
+                            title=f"Voice_{req.user_name}",
+                            performer="NaoRobot"
+                        )
+                        brain.stats["voice_generated"] += 1
+                    except Exception as e2:
+                        logger.error(f"Lỗi gửi audio: {e2}")
+                        bot.send_message(
+                            req.chat_id,
+                            f"❌ {html.escape(req.user_name)}, không thể gửi file audio.",
+                            reply_to_message_id=req.reply_id,
+                            parse_mode="HTML"
+                        )
             else:
-                # Tất cả engine đều thất bại
                 error_msg = (
                     f"❌ <b>{html.escape(req.user_name)}</b>, không thể tạo giọng nói.\n"
-                    f"<i>Lý do: Tất cả engine TTS (edge-tts, gTTS, pyttsx3) đều thất bại.</i>\n"
-                    f"<i>Text của bạn: {html.escape(voice_text[:100])}...</i>"
+                    f"<i>Lý do: {result_msg}</i>\n"
+                    f"<i>Text: {html.escape(voice_text[:100])}...</i>\n"
+                    f"<i>Thử text ngắn hơn hoặc không chứa ký tự đặc biệt.</i>"
                 )
-                bot.send_message(
-                    req.chat_id,
-                    error_msg,
-                    reply_to_message_id=req.reply_id,
-                    parse_mode="HTML"
-                )
-                logger.error(f"Voice thất bại hoàn toàn cho user {req.user_name}.")
+                try:
+                    bot.send_message(
+                        req.chat_id,
+                        error_msg,
+                        reply_to_message_id=req.reply_id,
+                        parse_mode="HTML"
+                    )
+                except:
+                    pass
+                logger.error(f"Voice thất bại: {result_msg}")
             
             voice_queue.task_done()
         except Exception as e:
             logger.error(f"Voice worker lỗi: {e}\n{traceback.format_exc()}")
-            # Đánh dấu task done để không bị kẹt queue
             try:
                 voice_queue.task_done()
             except:
@@ -700,6 +691,7 @@ for _ in range(4):
 # ║  AI GỌI (TỰ SỬA)                                          ║
 # ╚══════════════════════════════════════════════════════════════╝
 def ask_ai(prompt: str, uid: Optional[int] = None) -> str:
+    """Gửi prompt đến AI với cơ chế xoay vòng key và cache."""
     global ck_idx
     if brain.state == "sleep":
         return random.choice(get_kho())
@@ -759,6 +751,7 @@ def ask_ai(prompt: str, uid: Optional[int] = None) -> str:
             k["status"], k["fail"] = True, 0
         brain.stats["errors"] = 0
         brain.state = "repair"
+        logger.critical("Tất cả AI key đã reset tự động.")
         return "[Não tự sửa] AI đã reset. Thử lại sau 5s."
     return random.choice(get_kho())
 
@@ -766,6 +759,7 @@ def ask_ai(prompt: str, uid: Optional[int] = None) -> str:
 # ║  CHỐNG SPAM & LINK BẨN                                    ║
 # ╚══════════════════════════════════════════════════════════════╝
 def antispam(m: telebot.types.Message) -> bool:
+    """Kiểm tra spam: >5 tin/4s -> warn, 3 warn -> ban 1h."""
     if is_admin(m.chat.id, m.from_user.id):
         return False
     uid, now = m.from_user.id, time.time()
@@ -799,6 +793,7 @@ def antispam(m: telebot.types.Message) -> bool:
     return False
 
 def antilink(m: telebot.types.Message) -> bool:
+    """Xóa tin nhắn chứa link Telegram."""
     if is_admin(m.chat.id, m.from_user.id):
         return False
     text = (m.text or "") + (m.caption or "")
@@ -820,6 +815,7 @@ def antilink(m: telebot.types.Message) -> bool:
 # ║  TẢI VIDEO TIKTOK                                          ║
 # ╚══════════════════════════════════════════════════════════════╝
 def download_tiktok(url: str, chat_id: int, reply_id: int) -> None:
+    """Tải video TikTok và gửi lại, xóa sau 60s."""
     try:
         api_resp = ses.get(
             f"https://api.tikwm.com/api/?url={requests.utils.quote(url)}",
@@ -840,14 +836,13 @@ def download_tiktok(url: str, chat_id: int, reply_id: int) -> None:
         logger.error(f"Lỗi tải TikTok: {e}")
 
 # ╔══════════════════════════════════════════════════════════════╗
-# ║  LỆNH /voice (ĐÃ FIX) - TEXT TO SPEECH                     ║
+# ║  LỆNH /voice - TEXT TO SPEECH (GOOGLE TRANSLATE TTS)       ║
 # ╚══════════════════════════════════════════════════════════════╝
 @bot.message_handler(commands=['voice'])
 def voice_cmd(m: telebot.types.Message) -> None:
     """
     Lệnh /voice [text] - Chuyển văn bản thành giọng nói.
-    Hỗ trợ reply để lấy text từ tin nhắn được reply.
-    Tự động fallback qua edge-tts -> gTTS -> pyttsx3.
+    Sử dụng Google Translate TTS trực tiếp (không cần API key).
     """
     if not is_grp(m) or antispam(m) or antilink(m):
         return
@@ -869,12 +864,12 @@ def voice_cmd(m: telebot.types.Message) -> None:
         del_msg(m.chat.id, msg.message_id, 10)
         return
 
-    # Kiểm tra độ dài (giới hạn 400 ký tự)
-    if len(voice_text) > 400:
-        voice_text = voice_text[:400]
-        bot.reply_to(m, "⚠️ Text quá dài, đã cắt còn 400 ký tự.", parse_mode="HTML")
+    # Giới hạn độ dài
+    if len(voice_text) > 500:
+        voice_text = voice_text[:500]
+        bot.reply_to(m, "⚠️ Text quá dài, đã cắt còn 500 ký tự.", parse_mode="HTML")
     
-    # Kiểm tra text không chỉ toàn ký tự đặc biệt
+    # Kiểm tra text có ký tự đọc được không
     if not re.search(r'[a-zA-ZÀ-ỹà-ỹ0-9]', voice_text):
         msg = bot.reply_to(m, "❌ Text không chứa ký tự đọc được.", parse_mode="HTML")
         del_msg(m.chat.id, msg.message_id, 10)
@@ -905,6 +900,7 @@ def voice_cmd(m: telebot.types.Message) -> None:
 
 @bot.message_handler(commands=['ban'])
 def ban_cmd(m: telebot.types.Message) -> None:
+    """Lệnh ban người dùng."""
     if not is_grp(m) or not is_admin(m.chat.id, m.from_user.id):
         return
     target, reason = extract_user_and_reason(m, bot.get_me().username)
@@ -925,6 +921,7 @@ def ban_cmd(m: telebot.types.Message) -> None:
 
 @bot.message_handler(commands=['unban'])
 def unban_cmd(m: telebot.types.Message) -> None:
+    """Lệnh unban người dùng."""
     if not is_grp(m) or not is_admin(m.chat.id, m.from_user.id):
         return
     target, _ = extract_user_and_reason(m, bot.get_me().username)
@@ -942,6 +939,7 @@ def unban_cmd(m: telebot.types.Message) -> None:
 
 @bot.message_handler(commands=['mute'])
 def mute_cmd(m: telebot.types.Message) -> None:
+    """Lệnh mute người dùng."""
     if not is_grp(m) or not is_admin(m.chat.id, m.from_user.id):
         return
     target, reason = extract_user_and_reason(m, bot.get_me().username)
@@ -974,6 +972,7 @@ def mute_cmd(m: telebot.types.Message) -> None:
 
 @bot.message_handler(commands=['unmute'])
 def unmute_cmd(m: telebot.types.Message) -> None:
+    """Lệnh unmute người dùng."""
     if not is_grp(m) or not is_admin(m.chat.id, m.from_user.id):
         return
     target, _ = extract_user_and_reason(m, bot.get_me().username)
@@ -999,6 +998,7 @@ def unmute_cmd(m: telebot.types.Message) -> None:
 
 @bot.message_handler(commands=['warn'])
 def warn_cmd(m: telebot.types.Message) -> None:
+    """Lệnh cảnh cáo người dùng (3 warn = ban 1h)."""
     if not is_grp(m) or not is_admin(m.chat.id, m.from_user.id):
         return
     target, reason = extract_user_and_reason(m, bot.get_me().username)
@@ -1025,6 +1025,7 @@ def warn_cmd(m: telebot.types.Message) -> None:
 
 @bot.message_handler(commands=['del'])
 def del_cmd(m: telebot.types.Message) -> None:
+    """Xóa tin nhắn được reply."""
     if not is_grp(m) or not is_admin(m.chat.id, m.from_user.id):
         return
     if m.reply_to_message:
@@ -1039,6 +1040,7 @@ def del_cmd(m: telebot.types.Message) -> None:
 
 @bot.message_handler(commands=['rule'])
 def rule_cmd(m: telebot.types.Message) -> None:
+    """Xem hoặc đặt nội quy."""
     if not is_grp(m):
         return
     if m.text.strip() == '/rule':
@@ -1060,6 +1062,7 @@ def rule_cmd(m: telebot.types.Message) -> None:
 
 @bot.message_handler(commands=['admin'])
 def admin_list_cmd(m: telebot.types.Message) -> None:
+    """Danh sách quản trị viên."""
     if not is_grp(m):
         return
     try:
@@ -1076,6 +1079,7 @@ def admin_list_cmd(m: telebot.types.Message) -> None:
 
 @bot.message_handler(commands=['vote'])
 def vote_cmd(m: telebot.types.Message) -> None:
+    """Tạo cuộc bình chọn."""
     if not is_grp(m) or not is_admin(m.chat.id, m.from_user.id):
         return
     args = m.text.split(maxsplit=1)
@@ -1115,6 +1119,7 @@ def vote_cmd(m: telebot.types.Message) -> None:
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('vote_'))
 def vote_callback(call: types.CallbackQuery) -> None:
+    """Xử lý khi người dùng bấm nút vote."""
     _, msg_id, opt_idx = call.data.split('_')
     msg_id = int(msg_id)
     opt_idx = str(opt_idx)
@@ -1146,6 +1151,7 @@ def vote_callback(call: types.CallbackQuery) -> None:
 
 @bot.message_handler(commands=['broadcast'])
 def broadcast_cmd(m: telebot.types.Message) -> None:
+    """Gửi tin nhắn đến tất cả người dùng (chỉ ADMIN_ID)."""
     if m.from_user.id != ADMIN_ID:
         return
     text = m.text.split(maxsplit=1)
@@ -1164,6 +1170,7 @@ def broadcast_cmd(m: telebot.types.Message) -> None:
 
 @bot.message_handler(commands=['kick'])
 def kick_cmd(m: telebot.types.Message) -> None:
+    """Kick người dùng khỏi nhóm."""
     if not is_grp(m) or not is_admin(m.chat.id, m.from_user.id):
         return
     target, reason = extract_user_and_reason(m, bot.get_me().username)
@@ -1184,6 +1191,7 @@ def kick_cmd(m: telebot.types.Message) -> None:
 
 @bot.message_handler(commands=['listmuted'])
 def list_muted_cmd(m: telebot.types.Message) -> None:
+    """Liệt kê những người đang bị mute."""
     if not is_grp(m) or not is_admin(m.chat.id, m.from_user.id):
         return
     if not mutes:
@@ -1199,16 +1207,15 @@ def list_muted_cmd(m: telebot.types.Message) -> None:
 
 @bot.message_handler(commands=['ttsstatus'])
 def tts_status_cmd(m: telebot.types.Message) -> None:
-    """Lệnh kiểm tra trạng thái các engine TTS."""
+    """Lệnh kiểm tra trạng thái TTS."""
     if not is_grp(m):
         return
     status = (
         f"🔊 <b>Trạng thái TTS:</b>\n"
-        f"edge-tts: {'✅' if HAS_EDGE_TTS else '❌'}\n"
-        f"gTTS: {'✅' if HAS_GTTS else '❌'}\n"
-        f"pyttsx3 (offline): {'✅' if HAS_PYTTSX3 else '❌'}\n"
-        f"Voice queue: {voice_queue.qsize()}\n"
-        f"Voice generated: {brain.stats['voice_generated']}"
+        f"Engine: <code>Google Translate TTS (trực tiếp)</code>\n"
+        f"Voice queue: <code>{voice_queue.qsize()}</code>\n"
+        f"Voice generated: <code>{brain.stats['voice_generated']}</code>\n"
+        f"<i>Không cần API key, hoạt động mọi lúc.</i>"
     )
     msg = bot.reply_to(m, status, parse_mode="HTML")
     del_msg(m.chat.id, msg.message_id, 20)
@@ -1218,17 +1225,18 @@ def tts_status_cmd(m: telebot.types.Message) -> None:
 # ╚══════════════════════════════════════════════════════════════╝
 @bot.message_handler(commands=['start'])
 def start(m: telebot.types.Message) -> None:
+    """Lệnh /start: hiển thị hướng dẫn."""
     if not is_grp(m) or antispam(m) or antilink(m):
         return
     users[str(m.from_user.id)] = m.from_user.first_name
     save_users(users)
     brain.trusted_users.add(m.from_user.id)
     help_text = (
-        "<b>🧠 Não Robot - Audio Voice (Đã Fix)</b>\n"
+        "<b>🧠 Não Robot - TTS Google Translate</b>\n"
         "/ban /unban /mute /unmute /warn /kick /del\n"
         "/rule /admin /vote /listmuted /brain\n"
         "<b>/voice [text]</b> - Chuyển text thành giọng nói 🎙️\n"
-        "<b>/ttsstatus</b> - Kiểm tra engine TTS\n"
+        "<b>/ttsstatus</b> - Kiểm tra trạng thái TTS\n"
         "TikTok link = tải video\n"
         "Tag/reply bot = chat AI\n"
         "<i>(Xóa sau 60s)</i>"
@@ -1238,6 +1246,7 @@ def start(m: telebot.types.Message) -> None:
 
 @bot.message_handler(commands=['brain'])
 def brain_cmd(m: telebot.types.Message) -> None:
+    """Lệnh /brain: xem trạng thái não."""
     if not is_grp(m):
         return
     if not is_admin(m.chat.id, m.from_user.id):
@@ -1257,14 +1266,14 @@ def brain_cmd(m: telebot.types.Message) -> None:
         f"Uptime: <code>{uptime//3600}h{(uptime%3600)//60}m</code>\n"
         f"Trusted: <code>{len(brain.trusted_users)}</code>\n"
         f"Learned: <code>{len(brain.learned)}</code>\n"
-        f"Voice queue: <code>{voice_queue.qsize()}</code>\n"
-        f"TTS: edge-tts={'✅' if HAS_EDGE_TTS else '❌'} gTTS={'✅' if HAS_GTTS else '❌'} pyttsx3={'✅' if HAS_PYTTSX3 else '❌'}"
+        f"Voice queue: <code>{voice_queue.qsize()}</code>"
     )
     msg = bot.reply_to(m, status_text, parse_mode="HTML")
     del_msg(m.chat.id, msg.message_id, 30)
 
 @bot.message_handler(func=lambda m: is_grp(m) and m.text)
 def handle_text(m: telebot.types.Message) -> None:
+    """Xử lý mọi tin nhắn văn bản trong nhóm."""
     if antispam(m) or antilink(m) or m.text.startswith('/'):
         return
     users[str(m.from_user.id)] = m.from_user.first_name
@@ -1272,6 +1281,7 @@ def handle_text(m: telebot.types.Message) -> None:
 
     brain.think({"uid": m.from_user.id, "txt": m.text, "cmd": False})
 
+    # Tải video TikTok nếu có
     match = TIKTOK_LINK.search(m.text)
     if match:
         download_executor.submit(download_tiktok, match.group(0), m.chat.id, m.message_id)
@@ -1304,6 +1314,7 @@ def handle_text(m: telebot.types.Message) -> None:
 
 @bot.message_handler(content_types=['new_chat_members'])
 def welcome(m: telebot.types.Message) -> None:
+    """Chào mừng thành viên mới."""
     if not is_grp(m):
         return
     for u in m.new_chat_members:
@@ -1320,6 +1331,7 @@ def welcome(m: telebot.types.Message) -> None:
 
 @bot.message_handler(content_types=['left_chat_member'])
 def goodbye(m: telebot.types.Message) -> None:
+    """Thông báo khi thành viên rời nhóm."""
     if not is_grp(m):
         return
     u = m.left_chat_member
@@ -1333,9 +1345,10 @@ def goodbye(m: telebot.types.Message) -> None:
     del_msg(m.chat.id, msg.message_id, 30)
 
 # ╔══════════════════════════════════════════════════════════════╗
-# ║  TÁC VỤ NỀN                                                ║
+# ║  TÁC VỤ NỀN (BACKGROUND TASKS)                             ║
 # ╚══════════════════════════════════════════════════════════════╝
 def scheduler_task() -> None:
+    """Vòng lặp nền: thông báo giờ, unmute, dọn dẹp."""
     last_hour = -1
     while True:
         try:
@@ -1357,6 +1370,7 @@ def scheduler_task() -> None:
             if now.minute != 0:
                 last_hour = -1
 
+            # Tự động unmute
             to_remove = []
             for uid, until in mutes.items():
                 if time.time() > until:
@@ -1383,6 +1397,7 @@ def scheduler_task() -> None:
         time.sleep(15)
 
 def auto_save_task() -> None:
+    """Tự động lưu dữ liệu mỗi 10 phút."""
     while True:
         time.sleep(600)
         try:
@@ -1395,18 +1410,15 @@ def auto_save_task() -> None:
 # ║  MAIN                                                      ║
 # ╚══════════════════════════════════════════════════════════════╝
 def main() -> None:
+    """Điểm vào chính của chương trình."""
     loaded_users = load_users()
     if isinstance(loaded_users, dict):
         users.update(loaded_users)
     
     logger.info(f"Khởi động với {len(users)} người dùng, mood={brain.mood}")
-    logger.info(f"TTS engines: edge-tts={HAS_EDGE_TTS}, gTTS={HAS_GTTS}, pyttsx3={HAS_PYTTSX3}")
-    
-    if not HAS_EDGE_TTS and not HAS_GTTS and not HAS_PYTTSX3:
-        logger.critical("KHÔNG CÓ ENGINE TTS NÀO! Cài đặt: pip install edge-tts gtts pyttsx3")
-        logger.critical("Trên Termux/Android: pkg install python && pip install gtts pyttsx3")
-        logger.critical("Trên Windows/Linux: pip install edge-tts gtts pyttsx3")
+    logger.info("TTS Engine: Google Translate TTS (trực tiếp, không cần API key)")
 
+    # Khởi động thread nền
     Thread(target=scheduler_task, daemon=True).start()
     Thread(target=auto_save_task, daemon=True).start()
 
