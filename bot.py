@@ -6,6 +6,7 @@
 import sys, io, os, json, time, random, re, html, logging, traceback, hashlib
 import urllib.parse, gc, ctypes, psutil, weakref, signal, base64, tempfile
 import math, statistics, itertools
+import threading                                          # FIX 1: THÊM DÒNG NÀY
 from threading import Thread, Lock, Timer, Event
 from datetime import datetime, timedelta, date
 from collections import deque, defaultdict, OrderedDict, Counter
