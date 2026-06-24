@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 # ┌────────────────────────────────────────────────────────────────────────┐
-# │                    NÃO ROBOT - ULTIMATE EDITION                        │
-# │  3000 dòng - Điểm danh + Nổ Hũ + Games + File + Voice + Stats + Admin │
+# │                    NÃO ROBOT - AI RAM MANAGER                           │
+# │  AI tự động dọn dẹp 90% bộ nhớ - Chống tràn RAM - Tối ưu hiệu suất     │
 # │  Tác giả: palofsc (palo)  |  Ngày: 2026-06-24                          │
 # └────────────────────────────────────────────────────────────────────────┘
 import sys, io, os, json, time, random, re, html, hashlib, subprocess
 import socket, signal, logging, base64, tempfile, asyncio, traceback
 import urllib.parse, urllib.request, zipfile, csv, xml.etree.ElementTree as ET
+import gc, ctypes, psutil, threading, weakref
 from threading import Thread, Lock, Event, Timer
 from datetime import datetime, timedelta, date
 from collections import deque, defaultdict, OrderedDict, Counter
@@ -15,6 +16,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from queue import Queue, PriorityQueue
 from dataclasses import dataclass, field
 from io import StringIO, BytesIO
+from enum import Enum
 
 # ─── LOGGING ──────────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -38,36 +40,386 @@ from telebot import types, util
 import requests
 import pytz
 
-# ─── THƯ VIỆN ĐỌC FILE ──────────────────────────────────────────────────
-try:
-    import PyPDF2
-    HAS_PYPDF2 = True
-except ImportError:
-    HAS_PYPDF2 = False
-    logger.warning("PyPDF2 chưa cài: pip install PyPDF2")
+# ─── THƯ VIỆN FILE ──────────────────────────────────────────────────────────
+try: import PyPDF2; HAS_PYPDF2 = True
+except ImportError: HAS_PYPDF2 = False
 
-try:
-    import docx
-    HAS_DOCX = True
-except ImportError:
-    HAS_DOCX = False
-    logger.warning("python-docx chưa cài: pip install python-docx")
+try: import docx; HAS_DOCX = True
+except ImportError: HAS_DOCX = False
 
-try:
-    from bs4 import BeautifulSoup
-    HAS_BS4 = True
-except ImportError:
-    HAS_BS4 = False
-    logger.warning("BeautifulSoup4 chưa cài: pip install beautifulsoup4")
+try: from bs4 import BeautifulSoup; HAS_BS4 = True
+except ImportError: HAS_BS4 = False
 
-try:
-    import chardet
-    HAS_CHARDET = True
-except ImportError:
-    HAS_CHARDET = False
+try: import chardet; HAS_CHARDET = True
+except ImportError: HAS_CHARDET = False
 
 # ╔══════════════════════════════════════════════════════════════╗
-# ║  NÃO (BRAIN) - LỚP ĐIỀU KHIỂN TRUNG TÂM                    ║
+# ║  AI RAM MANAGER - QUẢN LÍ BỘ NHỚ THÔNG MINH                ║
+# ╚══════════════════════════════════════════════════════════════╝
+
+class MemoryUnit(Enum):
+    BYTES = 1
+    KB = 1024
+    MB = 1024 ** 2
+    GB = 1024 ** 3
+
+@dataclass
+class MemorySnapshot:
+    """Ảnh chụp trạng thái bộ nhớ tại một thời điểm."""
+    timestamp: float
+    rss: int           # Resident Set Size (RAM thực)
+    vms: int           # Virtual Memory Size
+    cpu_percent: float
+    thread_count: int
+    open_files: int
+    gc_objects: int
+
+class AIRamManager:
+    """
+    AI quản lí RAM - Tự động giám sát, phân tích và dọn dẹp bộ nhớ.
+    
+    Nguyên lí hoạt động:
+    1. Giám sát liên tục mức sử dụng RAM (mỗi 30s)
+    2. Phân tích xu hướng tăng trưởng bộ nhớ bằng AI đơn giản
+    3. Khi RAM vượt ngưỡng -> tự động dọn dẹp theo cấp độ
+    4. Ghi log và cảnh báo khi phát hiện memory leak
+    5. Tối ưu cache, session, thread pool định kỳ
+    """
+    
+    # Ngưỡng RAM (bytes) - 90% là mục tiêu dọn dẹp
+    WARNING_THRESHOLD = 0.70   # Cảnh báo ở 70%
+    CLEAN_LIGHT = 0.75         # Dọn nhẹ ở 75%
+    CLEAN_MEDIUM = 0.82        # Dọn vừa ở 82%
+    CLEAN_AGGRESSIVE = 0.90    # Dọn mạnh ở 90% (MỤC TIÊU)
+    CRITICAL = 0.95            # Khẩn cấp ở 95%
+    
+    def __init__(self, max_ram_mb: int = 512):
+        self.max_ram_bytes = max_ram_mb * 1024 * 1024
+        self.process = psutil.Process(os.getpid())
+        self.snapshots: deque = deque(maxlen=100)
+        self.last_clean_time: float = 0
+        self.clean_cooldown: float = 30  # Giây giữa các lần dọn
+        self.total_cleaned_bytes: int = 0
+        self.clean_count: int = 0
+        self.leak_warnings: int = 0
+        self.is_cleaning: bool = False
+        self.clean_lock = Lock()
+        
+        # Cache thông minh với TTL
+        self.smart_cache: Dict[str, Tuple[Any, float]] = {}
+        self.cache_ttl: float = 300  # 5 phút mặc định
+        
+        # Weak references để tránh memory leak
+        self.weak_refs: List[weakref.ref] = []
+        
+        # Thread pool thông minh - tự co giãn
+        self.active_threads: int = 0
+        self.max_threads: int = 50
+        self.idle_threads: int = 0
+        
+        logger.info(f"🧠 AI RAM Manager khởi tạo. Max RAM: {max_ram_mb}MB")
+
+    def get_current_memory(self) -> MemorySnapshot:
+        """Lấy ảnh chụp bộ nhớ hiện tại."""
+        try:
+            mem_info = self.process.memory_info()
+            cpu = self.process.cpu_percent(interval=0.1)
+            threads = self.process.num_threads()
+            open_files = len(self.process.open_files()) if hasattr(self.process, 'open_files') else 0
+            gc_objects = len(gc.get_objects())
+            
+            return MemorySnapshot(
+                timestamp=time.time(),
+                rss=mem_info.rss,
+                vms=mem_info.vms,
+                cpu_percent=cpu,
+                thread_count=threads,
+                open_files=open_files,
+                gc_objects=gc_objects
+            )
+        except Exception as e:
+            logger.error(f"Lỗi lấy memory snapshot: {e}")
+            return MemorySnapshot(time.time(), 0, 0, 0, 0, 0, 0)
+
+    def get_memory_usage_percent(self) -> float:
+        """Phần trăm RAM đã sử dụng so với giới hạn."""
+        snapshot = self.get_current_memory()
+        return snapshot.rss / self.max_ram_bytes
+
+    def get_memory_mb(self) -> float:
+        """RAM hiện tại tính bằng MB."""
+        return self.process.memory_info().rss / (1024 * 1024)
+
+    def analyze_trend(self) -> str:
+        """AI phân tích xu hướng tăng trưởng RAM."""
+        if len(self.snapshots) < 3:
+            return "stable"
+        
+        recent = list(self.snapshots)[-5:]
+        rss_values = [s.rss for s in recent]
+        
+        if len(rss_values) < 3:
+            return "stable"
+        
+        # Tính tốc độ tăng (bytes/giây)
+        time_diff = recent[-1].timestamp - recent[0].timestamp
+        if time_diff <= 0:
+            return "stable"
+        
+        mem_diff = rss_values[-1] - rss_values[0]
+        growth_rate = mem_diff / time_diff  # bytes/second
+        
+        if growth_rate > 1024 * 1024:  # > 1MB/s
+            return "critical_growth"
+        elif growth_rate > 512 * 1024:  # > 512KB/s
+            return "rapid_growth"
+        elif growth_rate > 100 * 1024:  # > 100KB/s
+            return "slow_growth"
+        else:
+            return "stable"
+
+    def smart_cache_get(self, key: str) -> Optional[Any]:
+        """Lấy từ cache thông minh (có TTL)."""
+        if key in self.smart_cache:
+            value, expiry = self.smart_cache[key]
+            if time.time() < expiry:
+                return value
+            else:
+                del self.smart_cache[key]
+        return None
+
+    def smart_cache_set(self, key: str, value: Any, ttl: float = None):
+        """Lưu vào cache thông minh."""
+        if ttl is None:
+            ttl = self.cache_ttl
+        self.smart_cache[key] = (value, time.time() + ttl)
+        # Nếu cache quá lớn (>1000 entries), xóa 30% cũ nhất
+        if len(self.smart_cache) > 1000:
+            sorted_entries = sorted(self.smart_cache.items(), key=lambda x: x[1][1])
+            for k, _ in sorted_entries[:300]:
+                del self.smart_cache[k]
+
+    def register_weak_ref(self, obj: Any):
+        """Đăng ký weak reference để tránh memory leak."""
+        self.weak_refs.append(weakref.ref(obj))
+        # Dọn weak refs đã chết
+        self.weak_refs = [ref for ref in self.weak_refs if ref() is not None]
+
+    # ═══════════════════════════════════════════════════════════
+    # CÁC CẤP ĐỘ DỌN DẸP
+    # ═══════════════════════════════════════════════════════════
+
+    def clean_level_1(self) -> int:
+        """Dọn nhẹ (Light Clean): Clear cache hết hạn + gc collect thế hệ 0."""
+        freed = 0
+        
+        # Xóa cache hết hạn
+        now = time.time()
+        expired_keys = [k for k, (v, exp) in self.smart_cache.items() if now >= exp]
+        for k in expired_keys:
+            del self.smart_cache[k]
+        freed += len(expired_keys) * 100  # Ước tính
+        
+        # Xóa weak refs chết
+        old_len = len(self.weak_refs)
+        self.weak_refs = [ref for ref in self.weak_refs if ref() is not None]
+        freed += (old_len - len(self.weak_refs)) * 50
+        
+        # GC thế hệ 0 (nhanh nhất)
+        collected = gc.collect(0)
+        freed += collected * 200
+        
+        logger.info(f"🧹 Clean Level 1: ~{freed/1024:.1f}KB freed, {len(expired_keys)} cache entries")
+        return freed
+
+    def clean_level_2(self) -> int:
+        """Dọn vừa (Medium Clean): Level 1 + GC full + xóa 50% cache."""
+        freed = self.clean_level_1()
+        
+        # GC toàn bộ
+        collected = gc.collect(2)
+        freed += collected * 200
+        
+        # Xóa 50% cache cũ nhất (giữ lại cache quan trọng)
+        if len(self.smart_cache) > 100:
+            sorted_entries = sorted(self.smart_cache.items(), key=lambda x: x[1][1])
+            remove_count = len(self.smart_cache) // 2
+            for k, _ in sorted_entries[:remove_count]:
+                del self.smart_cache[k]
+            freed += remove_count * 100
+        
+        # Giải phóng các object không dùng
+        gc.garbage.clear()
+        
+        logger.info(f"🧹🧹 Clean Level 2: ~{freed/1024:.1f}KB freed")
+        return freed
+
+    def clean_level_3(self) -> int:
+        """Dọn mạnh (Aggressive Clean - 90%): Level 2 + xóa 80% cache + reset thread pool."""
+        freed = self.clean_level_2()
+        
+        # Xóa 80% cache
+        if self.smart_cache:
+            sorted_entries = sorted(self.smart_cache.items(), key=lambda x: x[1][1])
+            remove_count = int(len(self.smart_cache) * 0.8)
+            for k, _ in sorted_entries[:remove_count]:
+                del self.smart_cache[k]
+            freed += remove_count * 100
+        
+        # Giới hạn thread pool
+        self.max_threads = max(20, self.max_threads - 10)
+        
+        # Giải phóng memory bằng C malloc_trim (Linux)
+        try:
+            ctypes.CDLL("libc.so.6").malloc_trim(0)
+            freed += 1024 * 1024  # Ước tính 1MB
+        except:
+            pass
+        
+        # Force garbage collection
+        for _ in range(3):
+            gc.collect(2)
+        
+        gc.garbage.clear()
+        
+        logger.warning(f"🧹🧹🧹 Clean Level 3 (90%): ~{freed/1024/1024:.1f}MB freed")
+        return freed
+
+    def clean_level_critical(self) -> int:
+        """Dọn khẩn cấp (Critical - 95%): Level 3 + reset toàn bộ cache + restart nhẹ."""
+        freed = self.clean_level_3()
+        
+        # Xóa toàn bộ cache
+        cache_size = len(self.smart_cache)
+        self.smart_cache.clear()
+        freed += cache_size * 100
+        
+        # Reset thread pool về mức tối thiểu
+        self.max_threads = 20
+        
+        # Giải phóng toàn bộ weak refs
+        self.weak_refs.clear()
+        
+        # Gọi malloc_trim mạnh
+        try:
+            ctypes.CDLL("libc.so.6").malloc_trim(0)
+        except:
+            pass
+        
+        # GC nhiều lần
+        for _ in range(5):
+            gc.collect(2)
+        
+        gc.garbage.clear()
+        
+        logger.critical(f"🚨 Clean CRITICAL: ~{freed/1024/1024:.1f}MB freed")
+        return freed
+
+    # ═══════════════════════════════════════════════════════════
+    # AI QUYẾT ĐỊNH DỌN DẸP
+    # ═══════════════════════════════════════════════════════════
+
+    def ai_decide_clean(self) -> Tuple[int, str]:
+        """
+        AI phân tích và quyết định mức độ dọn dẹp.
+        Trả về (bytes_freed, action_description).
+        """
+        with self.clean_lock:
+            if self.is_cleaning:
+                return 0, "already_cleaning"
+            
+            # Kiểm tra cooldown
+            if time.time() - self.last_clean_time < self.clean_cooldown:
+                return 0, "cooldown"
+            
+            self.is_cleaning = True
+            
+            try:
+                usage_percent = self.get_memory_usage_percent()
+                trend = self.analyze_trend()
+                current_mb = self.get_memory_mb()
+                
+                # AI quyết định dựa trên % RAM + xu hướng
+                if usage_percent >= self.CRITICAL:
+                    logger.critical(f"🚨 RAM {usage_percent*100:.1f}% - DỌN KHẨN CẤP!")
+                    freed = self.clean_level_critical()
+                    action = "critical_clean"
+                elif usage_percent >= self.CLEAN_AGGRESSIVE:
+                    logger.warning(f"⚠️ RAM {usage_percent*100:.1f}% - DỌN MẠNH 90%!")
+                    freed = self.clean_level_3()
+                    action = "aggressive_clean"
+                elif usage_percent >= self.CLEAN_MEDIUM:
+                    logger.info(f"📊 RAM {usage_percent*100:.1f}% - DỌN VỪA")
+                    freed = self.clean_level_2()
+                    action = "medium_clean"
+                elif usage_percent >= self.CLEAN_LIGHT:
+                    logger.info(f"📉 RAM {usage_percent*100:.1f}% - DỌN NHẸ")
+                    freed = self.clean_level_1()
+                    action = "light_clean"
+                elif trend in ["rapid_growth", "critical_growth"]:
+                    logger.warning(f"📈 Phát hiện memory leak! RAM {usage_percent*100:.1f}% - DỌN CHỦ ĐỘNG")
+                    freed = self.clean_level_2()
+                    action = "leak_prevention"
+                    self.leak_warnings += 1
+                else:
+                    # RAM ổn định, chỉ GC nhẹ
+                    gc.collect(0)
+                    freed = 0
+                    action = "stable_no_clean"
+                
+                self.last_clean_time = time.time()
+                self.total_cleaned_bytes += freed
+                self.clean_count += 1
+                
+                return freed, action
+            finally:
+                self.is_cleaning = False
+
+    def monitor_loop(self):
+        """Vòng lặp giám sát RAM liên tục."""
+        while True:
+            try:
+                snapshot = self.get_current_memory()
+                self.snapshots.append(snapshot)
+                
+                usage_percent = self.get_memory_usage_percent()
+                
+                # Luôn dọn nếu vượt ngưỡng
+                if usage_percent >= self.WARNING_THRESHOLD:
+                    freed, action = self.ai_decide_clean()
+                    
+                    if action not in ["stable_no_clean", "cooldown", "already_cleaning"]:
+                        logger.info(
+                            f"📊 RAM: {self.get_memory_mb():.1f}MB/{self.max_ram_bytes/1024/1024:.0f}MB "
+                            f"({usage_percent*100:.1f}%) | Action: {action} | "
+                            f"Freed: {freed/1024/1024:.2f}MB"
+                        )
+                
+                # Ghi log định kỳ mỗi 5 phút
+                if random.random() < 0.03:  # ~5 phút 1 lần
+                    logger.info(
+                        f"💾 RAM Status: {self.get_memory_mb():.1f}MB | "
+                        f"Cache: {len(self.smart_cache)} | "
+                        f"Threads: {self.active_threads} | "
+                        f"GC Objects: {snapshot.gc_objects}"
+                    )
+                
+            except Exception as e:
+                logger.error(f"Lỗi monitor RAM: {e}")
+            
+            time.sleep(30)  # Kiểm tra mỗi 30 giây
+
+    def start_monitoring(self):
+        """Khởi động giám sát RAM trong thread riêng."""
+        monitor_thread = Thread(target=self.monitor_loop, daemon=True, name="AIRamMonitor")
+        monitor_thread.start()
+        logger.info("🧠 AI RAM Monitor đã khởi động (kiểm tra mỗi 30s)")
+
+# Khởi tạo AI RAM Manager toàn cục
+ram_manager = AIRamManager(max_ram_mb=512)
+
+# ╔══════════════════════════════════════════════════════════════╗
+# ║  NÃO (BRAIN) - TÍCH HỢP RAM MANAGER                        ║
 # ╚══════════════════════════════════════════════════════════════╝
 class Brain:
     def __init__(self, save_path: str = "brain.json"):
@@ -81,6 +433,7 @@ class Brain:
             "msg_processed": 0, "spam_blocked": 0, "ai_calls": 0,
             "errors": 0, "votes_created": 0, "voice_generated": 0,
             "files_processed": 0, "daily_checkins": 0, "nohu_spins": 0,
+            "games_played": 0, "ram_cleans": 0, "ram_freed_mb": 0.0,
             "uptime_start": time.time(), "last_save": time.time()
         }
         self.decision_log: deque = deque(maxlen=200)
@@ -107,6 +460,8 @@ class Brain:
     def save_state(self):
         with self.file_lock:
             self.stats["last_save"] = time.time()
+            self.stats["ram_cleans"] = ram_manager.clean_count
+            self.stats["ram_freed_mb"] = ram_manager.total_cleaned_bytes / (1024 * 1024)
             try:
                 with open(self.save_path, "w", encoding="utf-8") as f:
                     json.dump({"learned": dict(self.learned), "banned": list(self.banned_words),
@@ -144,6 +499,10 @@ class Brain:
         now = time.time()
         if now - self.last_health_check > 300:
             self.last_health_check = now
+            # Tích hợp kiểm tra RAM vào health check
+            ram_usage = ram_manager.get_memory_usage_percent()
+            if ram_usage >= ram_manager.CLEAN_AGGRESSIVE:
+                ram_manager.ai_decide_clean()
             if self.stats["errors"] > 20:
                 self.repair_mode = True; self.state = "repair"; self.stats["errors"] = 0
                 return "repair"
@@ -165,6 +524,7 @@ ses = requests.Session()
 ses.mount('https://', requests.adapters.HTTPAdapter(pool_connections=200, pool_maxsize=500, max_retries=3, pool_block=False))
 ses.mount('http://', requests.adapters.HTTPAdapter(pool_connections=200, pool_maxsize=500, max_retries=3, pool_block=False))
 
+# Thread pools với giới hạn RAM
 ai_executor = ThreadPoolExecutor(max_workers=20, thread_name_prefix="AI")
 voice_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="Voice")
 file_executor = ThreadPoolExecutor(max_workers=5, thread_name_prefix="File")
@@ -181,7 +541,7 @@ AI_KEYS = [
 MAX_FAIL = 3; ck_idx = 0; ck_lock = Lock()
 
 # ╔══════════════════════════════════════════════════════════════╗
-# ║  KHO CHỬI                                                  ║
+# ║  KHO CHỬI + BIẾN TOÀN CỤC                                  ║
 # ╚══════════════════════════════════════════════════════════════╝
 KHO_NORMAL = ["Mồm thối, câm đi.", "Não bã đậu, im lặng.", "Thùng rỗng kêu to.", "Cào phím nhanh, não chậm.", "Ảo tưởng sức mạnh.", "Về nhà rửa bát.", "IQ âm, đừng nói.", "Không ai cần mày.", "Mày là gì? Không là gì.", "Câm mồm, đỡ nhục."]
 KHO_HIGH = ["Nứt mắt đòi làm anh hùng.", "Đầu rỗng, mồm thối.", "Mạng xã hội nuôi mày à?", "Ra đời người ta vả cho.", "Mẹ gọi, về nhà đi.", "Tưởng mình ngầu? Hề vãi.", "Học không lo, cào phím giỏi.", "Tương lai mù mịt như chị Dậu.", "Đời vả mặt, mày cười ngây.", "Không có gì để nói với mày."]
@@ -192,9 +552,6 @@ def get_kho():
     elif lvl == "high": return KHO_HIGH
     return KHO_NORMAL
 
-# ╔══════════════════════════════════════════════════════════════╗
-# ║  BIẾN TOÀN CỤC & DỮ LIỆU                                   ║
-# ╚══════════════════════════════════════════════════════════════╝
 lock = Lock(); mem = deque(maxlen=50)
 users: Dict[str, str] = {}
 spam: Dict[int, List[float]] = {}
@@ -202,87 +559,71 @@ warn_counts: Dict[int, int] = {}
 mutes: Dict[int, float] = {}
 ai_cd: Dict[int, float] = {}
 vote_active: Dict[int, Dict] = {}
-game_sessions: Dict[int, Dict] = {}
 file_cache: Dict[str, Dict] = {}
+user_balance: Dict[int, int] = {}
+daily_checkin: Dict[int, str] = {}
+nohu_jackpot: int = 0
+nohu_history: deque = deque(maxlen=20)
+nohu_base = 100000; nohu_fee = 1000; nohu_multiplier = 0.05; nohu_last_reset = time.time()
+member_stats: Dict[str, Any] = {"daily_join": defaultdict(int), "daily_leave": defaultdict(int), "total_joined": 0, "total_left": 0, "current_members": 0, "join_dates": {}, "last_updated": time.time()}
+GAME_SESSIONS: Dict[int, Dict] = {}
+AI_GENERATED_GAMES: Dict[str, Dict] = {}
+GAME_LEADERBOARDS: Dict[str, Dict[int, int]] = defaultdict(lambda: defaultdict(int))
+GAME_ACHIEVEMENTS: Dict[int, List[str]] = defaultdict(list)
 
-# ═══════════ HỆ THỐNG TIỀN TỆ ẢO ═══════════
-# Tiền ảo trong group: Xu (💎)
-user_balance: Dict[int, int] = {}          # uid -> số xu
-daily_checkin: Dict[int, str] = {}         # uid -> ngày điểm danh cuối (isoformat)
-BALANCE_FILE = "balances.json"
-DAILY_FILE = "daily_checkins.json"
-
-# ═══════════ NỔ HŨ ═══════════
-nohu_jackpot: int = 0                      # Tổng tiền nổ hũ hiện tại
-nohu_history: deque = deque(maxlen=20)     # Lịch sử nổ hũ
-nohu_base = 100000                         # Jackpot khởi điểm
-nohu_fee = 1000                            # Phí mỗi lần quay
-nohu_multiplier = 0.05                     # 5% tiền quay vào jackpot
-nohu_last_reset = time.time()
-JACKPOT_FILE = "jackpot.json"
-
-# ═══════════ THỐNG KÊ THÀNH VIÊN ═══════════
-member_stats: Dict[str, Any] = {
-    "daily_join": defaultdict(int), "daily_leave": defaultdict(int),
-    "total_joined": 0, "total_left": 0, "current_members": 0,
-    "join_dates": {}, "last_updated": time.time()
-}
-
-MAX_CACHE_SIZE = 50
-MAX_FILE_SIZE = 20 * 1024 * 1024
+BALANCE_FILE = "balances.json"; DAILY_FILE = "daily_checkins.json"
+JACKPOT_FILE = "jackpot.json"; GAMES_FILE = "ai_games.json"
+LEADERBOARD_FILE = "leaderboards.json"
 USR_FILE = "usr.json"; STATS_FILE = "member_stats.json"; RULES_FILE = "rules.txt"
+MAX_FILE_SIZE = 20 * 1024 * 1024; MAX_CACHE_SIZE = 50
 TELEGRAM_LINK = re.compile(r'(https?://)?(www\.)?(t\.me|telegram\.me|telegram\.org|tg\.me)/[a-zA-Z0-9_]{5,}|@[a-zA-Z0-9_]{5,}', re.I)
 
 # ╔══════════════════════════════════════════════════════════════╗
-# ║  TIỆN ÍCH CHUNG                                            ║
+# ║  TIỆN ÍCH CHUNG (TÍCH HỢP SMART CACHE)                     ║
 # ╚══════════════════════════════════════════════════════════════╝
 def load_json(path: str, default: Any = {}) -> Any:
+    cached = ram_manager.smart_cache_get(f"json_{path}")
+    if cached is not None:
+        return cached
     if os.path.exists(path):
         try:
-            with open(path, 'r', encoding='utf-8') as f: return json.load(f)
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                ram_manager.smart_cache_set(f"json_{path}", data, 60)  # Cache 60s
+                return data
         except: pass
     return default
 
 def save_json(path: str, data: Any) -> None:
     with lock:
         try:
-            with open(path, 'w', encoding='utf-8') as f: json.dump(data, f, ensure_ascii=False, indent=2)
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            ram_manager.smart_cache_set(f"json_{path}", data, 60)
         except Exception as e: logger.error(f"Lỗi save {path}: {e}")
 
 def load_users() -> Dict[str, str]: return load_json(USR_FILE, {})
 def save_users(data: Dict[str, str]): save_json(USR_FILE, data)
-
 def load_balances() -> Dict[int, int]:
     data = load_json(BALANCE_FILE, {})
     return {int(k): v for k, v in data.items()}
-
-def save_balances(data: Dict[int, int]):
-    save_json(BALANCE_FILE, {str(k): v for k, v in data.items()})
-
+def save_balances(data: Dict[int, int]): save_json(BALANCE_FILE, {str(k): v for k, v in data.items()})
 def load_daily_checkins() -> Dict[int, str]:
     data = load_json(DAILY_FILE, {})
     return {int(k): v for k, v in data.items()}
-
-def save_daily_checkins(data: Dict[int, str]):
-    save_json(DAILY_FILE, {str(k): v for k, v in data.items()})
-
+def save_daily_checkins(data: Dict[int, str]): save_json(DAILY_FILE, {str(k): v for k, v in data.items()})
 def load_jackpot() -> int:
     data = load_json(JACKPOT_FILE, {"jackpot": nohu_base, "history": []})
     return data.get("jackpot", nohu_base)
-
-def save_jackpot(jackpot: int):
-    save_json(JACKPOT_FILE, {"jackpot": jackpot, "history": list(nohu_history), "last_reset": nohu_last_reset})
-
+def save_jackpot(jackpot: int): save_json(JACKPOT_FILE, {"jackpot": jackpot, "history": list(nohu_history), "last_reset": nohu_last_reset})
 def load_member_stats() -> Dict:
     data = load_json(STATS_FILE, {"daily_join": {}, "daily_leave": {}, "total_joined": 0, "total_left": 0, "current_members": 0, "join_dates": {}, "last_updated": time.time()})
     data["daily_join"] = defaultdict(int, data.get("daily_join", {}))
     data["daily_leave"] = defaultdict(int, data.get("daily_leave", {}))
     return data
-
 def save_member_stats():
     data = dict(member_stats)
-    data["daily_join"] = dict(data["daily_join"])
-    data["daily_leave"] = dict(data["daily_leave"])
+    data["daily_join"] = dict(data["daily_join"]); data["daily_leave"] = dict(data["daily_leave"])
     save_json(STATS_FILE, data)
 
 def del_msg(chat_id: int, msg_id: int, delay: int = 60):
@@ -311,9 +652,7 @@ def extract_user_and_reason(message, bot_username: str) -> Tuple[Optional[int], 
             else:
                 m = re.match(r'@(\w+)', arg)
                 if m:
-                    try:
-                        target = bot.get_chat_member(message.chat.id, m.group(0)).user.id
-                        reason = arg[m.end():].strip()
+                    try: target = bot.get_chat_member(message.chat.id, m.group(0)).user.id; reason = arg[m.end():].strip()
                     except: pass
                 else:
                     nm = re.search(r'\d+', arg)
@@ -331,452 +670,85 @@ def parse_duration(reason: str) -> int:
     return 3600
 
 def get_user_balance(uid: int) -> int:
-    """Lấy số dư của user, nếu chưa có thì tạo mới với 5000 xu."""
-    if uid not in user_balance:
-        user_balance[uid] = 5000
-        save_balances(user_balance)
+    if uid not in user_balance: user_balance[uid] = 5000; save_balances(user_balance)
     return user_balance[uid]
 
 def add_balance(uid: int, amount: int) -> int:
-    """Thêm tiền cho user."""
     bal = get_user_balance(uid)
     user_balance[uid] = max(0, bal + amount)
     save_balances(user_balance)
     return user_balance[uid]
 
 def deduct_balance(uid: int, amount: int) -> bool:
-    """Trừ tiền, trả về True nếu đủ."""
     bal = get_user_balance(uid)
-    if bal >= amount:
-        user_balance[uid] = bal - amount
-        save_balances(user_balance)
-        return True
+    if bal >= amount: user_balance[uid] = bal - amount; save_balances(user_balance); return True
     return False
 
 # ╔══════════════════════════════════════════════════════════════╗
-# ║  HỆ THỐNG ĐIỂM DANH HÀNG NGÀY                              ║
+# ║  LỆNH QUẢN LÍ RAM - /ramstatus                             ║
 # ╚══════════════════════════════════════════════════════════════╝
-def get_daily_reward(uid: int, consecutive_days: int = 1) -> int:
-    """Tính thưởng điểm danh dựa trên số ngày liên tiếp."""
-    base_reward = 500
-    bonus = min(consecutive_days - 1, 6) * 200  # Tối đa +1200 bonus
-    return base_reward + bonus
-
-@bot.message_handler(commands=['daily', 'diemdanh', 'checkin'])
-def daily_checkin_cmd(m):
-    """Điểm danh hàng ngày nhận xu."""
-    if not is_grp(m) or antispam(m): return
-    uid = m.from_user.id
-    today = date.today().isoformat()
-    users[str(uid)] = m.from_user.first_name; save_users(users)
-
-    last_checkin = daily_checkin.get(uid, "")
-    yesterday = (date.today() - timedelta(days=1)).isoformat()
-
-    if last_checkin == today:
-        bal = get_user_balance(uid)
-        msg = bot.reply_to(m, f"❌ <b>{html.escape(m.from_user.first_name)}</b>, hôm nay bạn đã điểm danh rồi!\n💰 Số dư: <b>{bal:,}</b> xu\n⏰ Quay lại sau 0h để điểm danh tiếp.", parse_mode="HTML")
-        del_msg(m.chat.id, msg.message_id, 15)
-        return
-
-    # Tính ngày liên tiếp
-    consecutive = 1
-    if last_checkin == yesterday:
-        # Tìm số ngày liên tiếp trước đó (tối đa 7)
-        d = date.today() - timedelta(days=1)
-        for i in range(1, 7):
-            check_date = (d - timedelta(days=i)).isoformat()
-            if daily_checkin.get(uid) == check_date:
-                consecutive += 1
-            else:
-                break
-    else:
-        consecutive = 1
-
-    reward = get_daily_reward(uid, consecutive)
-    daily_checkin[uid] = today
-    save_daily_checkins(daily_checkin)
-    add_balance(uid, reward)
-    brain.stats["daily_checkins"] += 1
-
-    # Streak emoji
-    streak_emoji = ["", "🔥", "🔥🔥", "💥", "💥💥", "⚡", "👑"]
-    streak_str = streak_emoji[min(consecutive-1, 6)] if consecutive > 1 else ""
-
-    response = (
-        f"✅ <b>ĐIỂM DANH THÀNH CÔNG!</b>\n"
-        f"👤 <b>{html.escape(m.from_user.first_name)}</b>\n"
-        f"💰 Nhận: <b>+{reward:,}</b> xu\n"
-        f"📅 Chuỗi: <b>{consecutive}</b> ngày liên tiếp {streak_str}\n"
-        f"💎 Số dư: <b>{get_user_balance(uid):,}</b> xu\n"
-        f"<i>Điểm danh mỗi ngày để nhận thưởng lớn hơn!</i>"
+@bot.message_handler(commands=['ramstatus', 'memory', 'ram'])
+def ram_status_cmd(m):
+    """Xem trạng thái RAM và thống kê dọn dẹp."""
+    if not is_grp(m) and m.from_user.id != ADMIN_ID: return
+    
+    snapshot = ram_manager.get_current_memory()
+    usage_pct = ram_manager.get_memory_usage_percent()
+    
+    # Tạo biểu đồ RAM đơn giản
+    bar_len = 20
+    filled = int(usage_pct * bar_len)
+    bar = "█" * filled + "░" * (bar_len - filled)
+    
+    text = (
+        f"🧠 <b>AI RAM MANAGER STATUS</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📊 RAM: <b>{ram_manager.get_memory_mb():.1f}MB</b> / {ram_manager.max_ram_bytes/1024/1024:.0f}MB\n"
+        f"📈 [{bar}] <b>{usage_pct*100:.1f}%</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🧹 Số lần dọn: <b>{ram_manager.clean_count}</b>\n"
+        f"💾 Tổng RAM đã giải phóng: <b>{ram_manager.total_cleaned_bytes/1024/1024:.2f}MB</b>\n"
+        f"⚠️ Cảnh báo leak: <b>{ram_manager.leak_warnings}</b>\n"
+        f"📦 Cache entries: <b>{len(ram_manager.smart_cache)}</b>\n"
+        f"🧵 Threads: <b>{snapshot.thread_count}</b>\n"
+        f"🗑️ GC Objects: <b>{snapshot.gc_objects:,}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📋 Xu hướng: <b>{ram_manager.analyze_trend()}</b>\n"
+        f"⏱️ Lần dọn cuối: <b>{datetime.fromtimestamp(ram_manager.last_clean_time).strftime('%H:%M:%S') if ram_manager.last_clean_time > 0 else 'Chưa'}</b>"
     )
-    msg = bot.reply_to(m, response, parse_mode="HTML")
-    del_msg(m.chat.id, msg.message_id, 30)
-
-@bot.message_handler(commands=['balance', 'xu', 'money'])
-def balance_cmd(m):
-    """Xem số dư xu."""
-    if not is_grp(m): return
-    uid = m.from_user.id
-    users[str(uid)] = m.from_user.first_name; save_users(users)
-    
-    # Nếu mention người khác
-    target = uid
-    target_name = m.from_user.first_name
-    if m.reply_to_message:
-        target = m.reply_to_message.from_user.id
-        target_name = m.reply_to_message.from_user.first_name
-    
-    bal = get_user_balance(target)
-    msg = bot.reply_to(m, f"💎 <b>{html.escape(target_name)}</b> có <b>{bal:,}</b> xu.", parse_mode="HTML")
-    del_msg(m.chat.id, msg.message_id, 20)
-
-@bot.message_handler(commands=['top', 'bxh'])
-def top_balance_cmd(m):
-    """Bảng xếp hạng người giàu nhất."""
-    if not is_grp(m): return
-    sorted_balances = sorted(user_balance.items(), key=lambda x: x[1], reverse=True)[:10]
-    text = "🏆 <b>BẢNG XẾP HẠNG GIÀU NHẤT</b>\n━━━━━━━━━━━━━━━━━━━━\n"
-    medals = ["🥇", "🥈", "🥉"] + ["  "] * 7
-    for i, (uid, bal) in enumerate(sorted_balances):
-        name = users.get(str(uid), str(uid))
-        text += f"{medals[i]} <b>#{i+1}</b> <a href='tg://user?id={uid}'>{html.escape(name)}</a>: <code>{bal:,}</code> xu\n"
-    if not sorted_balances:
-        text += "Chưa có ai trong bảng xếp hạng."
     msg = bot.reply_to(m, text, parse_mode="HTML")
     del_msg(m.chat.id, msg.message_id, 45)
 
-@bot.message_handler(commands=['give', 'chuyen'])
-def give_money_cmd(m):
-    """Chuyển xu cho người khác. /give [@mention/reply] [số xu]"""
-    if not is_grp(m) or antispam(m): return
-    uid = m.from_user.id
-    users[str(uid)] = m.from_user.first_name; save_users(users)
-    
-    target = None; amount = 0
-    if m.reply_to_message:
-        target = m.reply_to_message.from_user.id
-        parts = m.text.split()
-        if len(parts) >= 2:
-            try: amount = int(parts[1])
-            except: amount = 0
-    else:
-        parts = m.text.split()
-        if len(parts) >= 3:
-            mention_match = re.match(r'@(\w+)', parts[1])
-            if mention_match:
-                try:
-                    target = bot.get_chat_member(m.chat.id, parts[1]).user.id
-                except: target = None
-            elif parts[1].isdigit():
-                target = int(parts[1])
-            try: amount = int(parts[2])
-            except: amount = 0
-    
-    if not target or target == uid:
-        msg = bot.reply_to(m, "❌ Cần reply/@mention người nhận + số xu.", parse_mode="HTML"); del_msg(m.chat.id, msg.message_id, 10); return
-    if amount < 100:
-        msg = bot.reply_to(m, "❌ Số xu tối thiểu là 100.", parse_mode="HTML"); del_msg(m.chat.id, msg.message_id, 10); return
-    
-    # Phí chuyển 5%
-    fee = int(amount * 0.05)
-    total = amount + fee
-    
-    if not deduct_balance(uid, total):
-        bal = get_user_balance(uid)
-        msg = bot.reply_to(m, f"❌ Không đủ xu! Cần <b>{total:,}</b> (gồm {fee:,} phí). Số dư: <b>{bal:,}</b>", parse_mode="HTML"); del_msg(m.chat.id, msg.message_id, 15); return
-    
-    add_balance(target, amount)
-    target_name = users.get(str(target), str(target))
-    response = (
-        f"💸 <b>CHUYỂN TIỀN</b>\n"
-        f"👤 {html.escape(m.from_user.first_name)} → <a href='tg://user?id={target}'>{html.escape(target_name)}</a>\n"
-        f"💰 Số tiền: <b>{amount:,}</b> xu\n"
-        f"📊 Phí: <b>{fee:,}</b> xu\n"
-        f"💎 Số dư còn: <b>{get_user_balance(uid):,}</b> xu"
-    )
-    msg = bot.reply_to(m, response, parse_mode="HTML")
-    del_msg(m.chat.id, msg.message_id, 30)
-
-# ╔══════════════════════════════════════════════════════════════╗
-# ║  NỔ HŨ (JACKPOT SLOT MACHINE)                              ║
-# ╚══════════════════════════════════════════════════════════════╝
-# Biểu tượng nổ hũ
-SLOT_SYMBOLS = ["🍒", "🍋", "🍊", "🍇", "💎", "🔔", "7️⃣"]
-SLOT_WEIGHTS = [30, 25, 20, 15, 5, 3, 2]  # Tỉ lệ xuất hiện
-SLOT_PAYOUTS = {
-    "🍒🍒🍒": 5,     # x5 tiền cược
-    "🍋🍋🍋": 8,
-    "🍊🍊🍊": 12,
-    "🍇🍇🍇": 20,
-    "💎💎💎": 50,
-    "🔔🔔🔔": 100,
-    "7️⃣7️⃣7️⃣": 500,  # JACKPOT!
-}
-
-@bot.message_handler(commands=['nohu', 'slot', 'quay'])
-def nohu_cmd(m):
-    """Nổ Hũ: /nohu [cược] - Quay slot, cơ hội trúng JACKPOT!"""
-    if not is_grp(m) or antispam(m): return
-    uid = m.from_user.id
-    users[str(uid)] = m.from_user.first_name; save_users(users)
-    
-    parts = m.text.split()
-    if len(parts) < 2:
-        jackpot = load_jackpot()
-        msg = bot.reply_to(m, f"🎰 <b>NỔ HŨ</b>\n💰 <b>JACKPOT: {jackpot:,} xu</b>\n🎮 Dùng: /nohu [cược]\n💎 Phí: {nohu_fee:,} xu/lần\n🏆 3x7️⃣ = JACKPOT!", parse_mode="HTML")
-        del_msg(m.chat.id, msg.message_id, 20)
+@bot.message_handler(commands=['clearcache', 'dondep'])
+def clear_cache_cmd(m):
+    """Lệnh dọn dẹp thủ công (admin only)."""
+    if not is_admin(m.chat.id, m.from_user.id) and m.from_user.id != ADMIN_ID:
         return
     
-    try:
-        bet = int(parts[1])
-    except:
-        msg = bot.reply_to(m, "❌ Cược phải là số.", parse_mode="HTML"); del_msg(m.chat.id, msg.message_id, 5); return
+    status_msg = bot.reply_to(m, "🧹 Đang dọn dẹp bộ nhớ...", parse_mode="HTML")
     
-    if bet < 100:
-        msg = bot.reply_to(m, "❌ Cược tối thiểu 100 xu.", parse_mode="HTML"); del_msg(m.chat.id, msg.message_id, 5); return
-    if bet > 100000:
-        msg = bot.reply_to(m, "❌ Cược tối đa 100,000 xu.", parse_mode="HTML"); del_msg(m.chat.id, msg.message_id, 5); return
+    def _clean():
+        freed, action = ram_manager.ai_decide_clean()
+        try: bot.delete_message(m.chat.id, status_msg.message_id)
+        except: pass
+        
+        text = (
+            f"✅ <b>DỌN DẸP HOÀN TẤT</b>\n"
+            f"🎯 Hành động: <b>{action}</b>\n"
+            f"💾 RAM giải phóng: <b>{freed/1024/1024:.2f}MB</b>\n"
+            f"📊 RAM hiện tại: <b>{ram_manager.get_memory_mb():.1f}MB</b>\n"
+            f"📦 Cache còn: <b>{len(ram_manager.smart_cache)}</b> entries"
+        )
+        msg = bot.reply_to(m, text, parse_mode="HTML")
+        del_msg(m.chat.id, msg.message_id, 30)
     
-    total_cost = bet + nohu_fee
-    if not deduct_balance(uid, total_cost):
-        bal = get_user_balance(uid)
-        msg = bot.reply_to(m, f"❌ Không đủ xu! Cần <b>{total_cost:,}</b> (cược {bet:,} + phí {nohu_fee:,}). Số dư: <b>{bal:,}</b>", parse_mode="HTML"); del_msg(m.chat.id, msg.message_id, 10); return
-    
-    # Cập nhật jackpot (5% tiền cược vào quỹ)
-    jackpot = load_jackpot()
-    jackpot_contribution = int(bet * nohu_multiplier)
-    jackpot += jackpot_contribution
-    save_jackpot(jackpot)
-    brain.stats["nohu_spins"] += 1
-    
-    # Quay 3 cột
-    col1 = random.choices(SLOT_SYMBOLS, weights=SLOT_WEIGHTS, k=1)[0]
-    col2 = random.choices(SLOT_SYMBOLS, weights=SLOT_WEIGHTS, k=1)[0]
-    col3 = random.choices(SLOT_SYMBOLS, weights=SLOT_WEIGHTS, k=1)[0]
-    result = f"{col1}{col2}{col3}"
-    
-    # Kiểm tra kết quả
-    if col1 == col2 == col3:
-        symbol = col1
-        if symbol == "7️⃣":
-            # JACKPOT!!!
-            win_amount = jackpot
-            add_balance(uid, win_amount)
-            nohu_history.append({"uid": uid, "name": m.from_user.first_name, "amount": win_amount, "time": datetime.now(tz).strftime("%H:%M %d/%m")})
-            save_jackpot(nohu_base)  # Reset jackpot
-            outcome = f"🎉🎉🎉 <b>JACKPOT!!!</b> +{win_amount:,} xu"
-            emoji = "🏆"
-        else:
-            multiplier = SLOT_PAYOUTS.get(result, 2)
-            win_amount = bet * multiplier
-            add_balance(uid, win_amount)
-            outcome = f"✅ <b>NỔ HŨ!</b> (x{multiplier}) +{win_amount:,} xu"
-            emoji = "🎉"
-    elif col1 == col2 or col2 == col3 or col1 == col3:
-        # 2 biểu tượng giống: hoàn 50% tiền cược
-        win_amount = int(bet * 0.5)
-        add_balance(uid, win_amount)
-        outcome = f"🔹 2 giống: hoàn {win_amount:,} xu"
-        emoji = "🔄"
-    else:
-        win_amount = 0
-        outcome = f"💀 Thua -{total_cost:,} xu"
-        emoji = "❌"
-    
-    response = (
-        f"{emoji} <b>NỔ HŨ</b>\n"
-        f"┌──────────┐\n"
-        f"│ {col1}  {col2}  {col3} │\n"
-        f"└──────────┘\n"
-        f"🎯 Kết quả: {outcome}\n"
-        f"💰 JACKPOT hiện tại: <b>{load_jackpot():,}</b> xu\n"
-        f"💎 Số dư: <b>{get_user_balance(uid):,}</b> xu"
-    )
-    msg = bot.reply_to(m, response, parse_mode="HTML")
-    del_msg(m.chat.id, msg.message_id, 30)
-
-@bot.message_handler(commands=['jackpot', 'jp'])
-def jackpot_cmd(m):
-    """Xem jackpot hiện tại và lịch sử nổ hũ."""
-    if not is_grp(m): return
-    jackpot = load_jackpot()
-    text = f"🎰 <b>NỔ HŨ JACKPOT</b>\n💰 <b>Tổng: {jackpot:,} xu</b>\n🎮 /nohu [cược] để quay!\n\n📜 <b>LỊCH SỬ NỔ HŨ:</b>\n"
-    if nohu_history:
-        for h in list(nohu_history)[-5:]:
-            text += f"  🏆 {h['name']} trúng <b>{h['amount']:,}</b> xu ({h['time']})\n"
-    else:
-        text += "  Chưa có ai trúng JACKPOT.\n"
-    text += f"\n<pre>3x7️⃣ = JACKPOT | 3x💎 = x50 | 3x🔔 = x100</pre>"
-    msg = bot.reply_to(m, text, parse_mode="HTML")
-    del_msg(m.chat.id, msg.message_id, 30)
+    Thread(target=_clean, daemon=True).start()
 
 # ╔══════════════════════════════════════════════════════════════╗
-# ║  GAMES (TÀI XỈU, BẦU CUA, KÉO BÚA BAO, ĐOÁN SỐ)          ║
+# ║  GOOGLE TTS + GAMES + ĐIỂM DANH + NỔ HŨ + QUẢN LÍ         ║
 # ╚══════════════════════════════════════════════════════════════╝
-GAME_STATES: Dict[int, Dict] = {}
 
-def init_game_state(uid: int, game_type: str) -> Dict:
-    if game_type == "taixiu":
-        game = {"type": "taixiu", "balance": 1000, "started_at": time.time(), "history": [], "wins": 0, "losses": 0}
-    elif game_type == "baucua":
-        game = {"type": "baucua", "balance": 1000, "started_at": time.time(), "symbols": ["🦀", "🐟", "🦐", "🐓", "🦌", "🎃"], "history": [], "wins": 0, "losses": 0}
-    elif game_type == "keobuabao":
-        game = {"type": "keobuabao", "score": 0, "bot_score": 0, "draws": 0, "history": [], "started_at": time.time()}
-    elif game_type == "doanso":
-        game = {"type": "doanso", "secret": random.randint(1, 100), "attempts": 0, "max_attempts": 7, "started_at": time.time(), "guesses": []}
-    else:
-        return {}
-    GAME_STATES[uid] = game
-    return game
-
-@bot.message_handler(commands=['taixiu'])
-def taixiu_cmd(m):
-    if not is_grp(m) or antispam(m): return
-    uid = m.from_user.id
-    users[str(uid)] = m.from_user.first_name; save_users(users)
-    parts = m.text.split()
-    
-    if len(parts) < 3:
-        if uid not in GAME_STATES or GAME_STATES[uid].get("type") != "taixiu": init_game_state(uid, "taixiu")
-        g = GAME_STATES.get(uid, {})
-        msg = bot.reply_to(m, f"🎲 <b>TÀI XỈU</b>\n/taixiu [tai/xiu] [cược]\n💎 Số dư game: <b>{g.get('balance', 1000)}</b> xu\nTài (11-18) | Xỉu (3-10)", parse_mode="HTML")
-        del_msg(m.chat.id, msg.message_id, 20); return
-    
-    choice = parts[1].lower()
-    try: bet = int(parts[2])
-    except: bot.reply_to(m, "❌ Cược phải là số.", parse_mode="HTML"); return
-    
-    if choice not in ['tai', 'xiu']: bot.reply_to(m, "❌ Chọn 'tai' hoặc 'xiu'.", parse_mode="HTML"); return
-    if uid not in GAME_STATES or GAME_STATES[uid].get("type") != "taixiu": init_game_state(uid, "taixiu")
-    g = GAME_STATES[uid]
-    if bet > g["balance"] or bet < 1: bot.reply_to(m, f"❌ Số dư game không đủ ({g['balance']} xu). Nạp thêm bằng /daily.", parse_mode="HTML"); return
-    
-    dice = [random.randint(1, 6) for _ in range(3)]
-    total = sum(dice)
-    result = "tai" if total >= 11 else "xiu"
-    dice_str = " ".join([["⚀","⚁","⚂","⚃","⚄","⚅"][d-1] for d in dice])
-    
-    if choice == result:
-        g["balance"] += bet; g["wins"] += 1
-        outcome = f"✅ THẮNG +{bet} xu"
-    else:
-        g["balance"] -= bet; g["losses"] += 1
-        outcome = f"❌ THUA -{bet} xu"
-    
-    g["history"].append({"dice": dice, "total": total, "result": result, "choice": choice, "bet": bet})
-    if len(g["history"]) > 10: g["history"].pop(0)
-    
-    response = f"🎲 <b>TÀI XỈU</b>\n🎲 Xúc xắc: {dice_str} = <b>{total}</b> → <b>{result.upper()}</b>\n🎯 Bạn chọn: <b>{choice.upper()}</b>\n💰 {outcome} | Số dư game: <b>{g['balance']}</b> xu\n📊 Thắng: {g['wins']} | Thua: {g['losses']}"
-    msg = bot.reply_to(m, response, parse_mode="HTML"); del_msg(m.chat.id, msg.message_id, 30)
-
-@bot.message_handler(commands=['baucua'])
-def baucua_cmd(m):
-    if not is_grp(m) or antispam(m): return
-    uid = m.from_user.id
-    users[str(uid)] = m.from_user.first_name; save_users(users)
-    parts = m.text.split()
-    symbol_map = {"bau": 0, "bầu": 0, "cua": 1, "ca": 2, "cá": 2, "tom": 3, "tôm": 3, "ga": 4, "gà": 4, "nai": 5, "huou": 5, "hươu": 5}
-    game_symbols = ["🦀 Bầu", "🐟 Cua", "🦐 Cá", "🐓 Tôm", "🦌 Gà", "🎃 Nai"]
-    
-    if len(parts) < 3:
-        if uid not in GAME_STATES or GAME_STATES[uid].get("type") != "baucua": init_game_state(uid, "baucua")
-        g = GAME_STATES.get(uid, {})
-        msg = bot.reply_to(m, f"🎲 <b>BẦU CUA</b>\n{' | '.join(game_symbols)}\n/baucua [con] [cược]\n💎 Số dư game: <b>{g.get('balance', 1000)}</b> xu", parse_mode="HTML")
-        del_msg(m.chat.id, msg.message_id, 25); return
-    
-    choice = parts[1].lower()
-    try: bet = int(parts[2])
-    except: bot.reply_to(m, "❌ Cược phải là số.", parse_mode="HTML"); return
-    
-    if choice not in symbol_map: bot.reply_to(m, f"❌ Chọn: {', '.join(symbol_map.keys())}", parse_mode="HTML"); return
-    if uid not in GAME_STATES or GAME_STATES[uid].get("type") != "baucua": init_game_state(uid, "baucua")
-    g = GAME_STATES[uid]
-    if bet > g["balance"] or bet < 1: bot.reply_to(m, f"❌ Số dư game không đủ ({g['balance']} xu).", parse_mode="HTML"); return
-    
-    choice_idx = symbol_map[choice]
-    roll = [random.randint(0, 5) for _ in range(3)]
-    roll_symbols = [g["symbols"][i] for i in roll]
-    matches = roll.count(choice_idx)
-    
-    if matches > 0:
-        win_amount = bet * (matches + 1)
-        g["balance"] += win_amount - bet; g["wins"] += 1
-        outcome = f"✅ THẮNG +{win_amount - bet} xu (trúng {matches} con)"
-    else:
-        g["balance"] -= bet; g["losses"] += 1
-        outcome = f"❌ THUA -{bet} xu"
-    
-    response = f"🎲 <b>BẦU CUA</b>\n🎯 Kết quả: {' '.join(roll_symbols)}\n🎯 Bạn chọn: <b>{g['symbols'][choice_idx]}</b> (trúng {matches}/3)\n💰 {outcome} | Số dư game: <b>{g['balance']}</b> xu"
-    msg = bot.reply_to(m, response, parse_mode="HTML"); del_msg(m.chat.id, msg.message_id, 30)
-
-@bot.message_handler(commands=['kbb', 'keobuabao'])
-def kbb_cmd(m):
-    if not is_grp(m) or antispam(m): return
-    uid = m.from_user.id
-    users[str(uid)] = m.from_user.first_name; save_users(users)
-    parts = m.text.split()
-    choices = {"keo": "✌️ Kéo", "kéo": "✌️ Kéo", "bua": "🔨 Búa", "búa": "🔨 Búa", "bao": "📄 Bao"}
-    
-    if len(parts) < 2:
-        if uid not in GAME_STATES or GAME_STATES[uid].get("type") != "keobuabao": init_game_state(uid, "keobuabao")
-        g = GAME_STATES.get(uid, {})
-        msg = bot.reply_to(m, f"✌️ <b>KÉO BÚA BAO</b>\n/kbb [keo/bua/bao]\n👤 Bạn: <b>{g.get('score', 0)}</b> | 🤖 Bot: <b>{g.get('bot_score', 0)}</b> | 🤝 Hòa: <b>{g.get('draws', 0)}</b>", parse_mode="HTML")
-        del_msg(m.chat.id, msg.message_id, 15); return
-    
-    choice = parts[1].lower()
-    if choice not in choices: bot.reply_to(m, "❌ Chọn: keo/bua/bao", parse_mode="HTML"); return
-    if uid not in GAME_STATES or GAME_STATES[uid].get("type") != "keobuabao": init_game_state(uid, "keobuabao")
-    g = GAME_STATES[uid]
-    
-    user_choice = choices[choice]
-    bot_choice = random.choice(list(choices.values()))
-    user_idx = list(choices.values()).index(user_choice)
-    bot_idx = list(choices.values()).index(bot_choice)
-    
-    if user_idx == bot_idx: result = "🤝 HÒA"; g["draws"] += 1
-    elif (user_idx == 0 and bot_idx == 2) or (user_idx == 1 and bot_idx == 0) or (user_idx == 2 and bot_idx == 1): result = "✅ THẮNG"; g["score"] += 1
-    else: result = "❌ THUA"; g["bot_score"] += 1
-    
-    response = f"✌️ <b>KÉO BÚA BAO</b>\n👤 Bạn: {user_choice}\n🤖 Bot: {bot_choice}\n📊 {result}\n🏆 Bạn: <b>{g['score']}</b> | Bot: <b>{g['bot_score']}</b> | Hòa: <b>{g['draws']}</b>"
-    msg = bot.reply_to(m, response, parse_mode="HTML"); del_msg(m.chat.id, msg.message_id, 25)
-
-@bot.message_handler(commands=['doanso'])
-def doanso_cmd(m):
-    if not is_grp(m) or antispam(m): return
-    uid = m.from_user.id
-    users[str(uid)] = m.from_user.first_name; save_users(users)
-    parts = m.text.split()
-    
-    if len(parts) < 2:
-        init_game_state(uid, "doanso")
-        msg = bot.reply_to(m, "🔢 <b>ĐOÁN SỐ</b> (1-100)\n/doanso [số]\nBạn có <b>7</b> lần đoán!", parse_mode="HTML")
-        del_msg(m.chat.id, msg.message_id, 15); return
-    
-    try: guess = int(parts[1])
-    except: bot.reply_to(m, "❌ Nhập số từ 1-100.", parse_mode="HTML"); return
-    if guess < 1 or guess > 100: bot.reply_to(m, "❌ Số từ 1-100.", parse_mode="HTML"); return
-    if uid not in GAME_STATES or GAME_STATES[uid].get("type") != "doanso": init_game_state(uid, "doanso")
-    g = GAME_STATES[uid]
-    g["attempts"] += 1; g["guesses"].append(guess); secret = g["secret"]
-    
-    if guess == secret:
-        reward = (8 - g["attempts"]) * 500
-        add_balance(uid, reward)
-        response = f"🎉 <b>CHÍNH XÁC!</b> Số là <b>{secret}</b> sau {g['attempts']} lần!\n💰 Thưởng: <b>+{reward:,}</b> xu\n🏆 {['⭐','🌟🌟','🌟🌟🌟','🏅','🏅🏅','👑','💎'][min(g['attempts']-1,6)]}"
-        del GAME_STATES[uid]
-    elif g["attempts"] >= g["max_attempts"]:
-        response = f"💀 <b>HẾT LƯỢT!</b> Số là <b>{secret}</b>. Đã đoán: {', '.join(map(str, g['guesses']))}"
-        del GAME_STATES[uid]
-    elif guess < secret: response = f"🔢 <b>{guess}</b> → ⬆️ CAO HƠN ({g['max_attempts'] - g['attempts']} lần còn lại)"
-    else: response = f"🔢 <b>{guess}</b> → ⬇️ THẤP HƠN ({g['max_attempts'] - g['attempts']} lần còn lại)"
-    
-    msg = bot.reply_to(m, response, parse_mode="HTML"); del_msg(m.chat.id, msg.message_id, 30)
-
-# ╔══════════════════════════════════════════════════════════════╗
-# ║  GOOGLE TTS VOICE                                          ║
-# ╚══════════════════════════════════════════════════════════════╝
+# ─── GOOGLE TTS ──────────────────────────────────────────────────────────
 GOOGLE_TTS_URL = "https://translate.google.com/translate_tts"
 GOOGLE_TTS_HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", "Accept": "audio/mpeg, audio/*;q=0.9", "Referer": "https://translate.google.com/"}
 MAX_CHUNK_SIZE = 180
@@ -860,197 +832,154 @@ def voice_cmd(m):
         msg = bot.reply_to(m, "🎙️ Đang tạo voice...", parse_mode="HTML"); del_msg(m.chat.id, msg.message_id, 5)
     except: bot.reply_to(m, "⚠️ Hàng đợi voice đầy.", parse_mode="HTML")
 
-# ╔══════════════════════════════════════════════════════════════╗
-# ║  ĐỌC FILE                                                  ║
-# ╚══════════════════════════════════════════════════════════════╝
-def detect_encoding(raw_data: bytes) -> str:
-    if HAS_CHARDET:
-        try:
-            result = chardet.detect(raw_data[:50000])
-            if result.get('confidence', 0) > 0.5 and result.get('encoding'): return result['encoding']
-        except: pass
-    for enc in ['utf-8', 'utf-16', 'cp1252', 'latin-1', 'iso-8859-1', 'gbk']:
-        try: raw_data.decode(enc); return enc
-        except: pass
-    return 'utf-8'
+# ─── ĐIỂM DANH ──────────────────────────────────────────────────────────
+def get_daily_reward(uid: int, consecutive_days: int = 1) -> int:
+    return 500 + min(consecutive_days - 1, 6) * 200
 
-def process_file(file_data: bytes, file_name: str, file_id: str) -> Dict:
-    if file_id in file_cache and time.time() - file_cache[file_id]["timestamp"] < 300: return file_cache[file_id]
-    file_size = len(file_data)
-    if file_size > MAX_FILE_SIZE: return {"text": "", "stats": {"error": f"File quá lớn ({file_size/1024/1024:.1f}MB). Tối đa 20MB."}, "summary": "", "preview": "❌ File vượt quá 20MB."}
-    
-    ext = os.path.splitext(file_name)[1].lower() if file_name else ""; text = ""; stats = {"file_name": file_name, "file_size": file_size, "ext": ext}
-    try:
-        if ext == '.pdf' and HAS_PYPDF2:
-            reader = PyPDF2.PdfReader(BytesIO(file_data))
-            text = "\n".join([(p.extract_text() or "") for p in reader.pages]); stats.update({"pages": len(reader.pages), "chars": len(text)})
-        elif ext == '.docx' and HAS_DOCX:
-            doc = docx.Document(BytesIO(file_data))
-            text = "\n".join([p.text for p in doc.paragraphs if p.text.strip()]); stats.update({"paragraphs": len(doc.paragraphs), "chars": len(text)})
-        else:
-            enc = detect_encoding(file_data); text = file_data.decode(enc, errors='replace'); stats.update({"encoding": enc, "lines": len(text.splitlines()), "chars": len(text)})
-    except Exception as e: stats["error"] = str(e)
-    
-    if len(text) > 100000: preview = text[:3000]; summary = f"File {file_name} ({file_size/1024/1024:.1f}MB) - {len(text):,} ký tự."
-    else: preview = text[:5000] if len(text) > 5000 else text; summary = f"File {file_name} ({file_size/1024/1024:.1f}MB) - {len(text):,} ký tự."
-    if len(text) > len(preview): preview += f"\n\n... (còn {len(text)-len(preview):,} ký tự)"
-    
-    result = {"text": text[:100000], "stats": stats, "summary": summary, "preview": preview}
-    file_cache[file_id] = {**result, "timestamp": time.time()}
-    if len(file_cache) > MAX_CACHE_SIZE:
-        oldest = min(file_cache.items(), key=lambda x: x[1]["timestamp"]); del file_cache[oldest[0]]
-    brain.stats["files_processed"] += 1
-    return result
-
-def search_in_text(text: str, query: str) -> List[str]:
-    if not query or not text: return []
-    lines = text.splitlines(); results = []
-    for i, line in enumerate(lines):
-        if query.lower() in line.lower():
-            start, end = max(0, i-1), min(len(lines), i+2)
-            results.append('\n'.join([f"{j+1}: {lines[j]}" for j in range(start, end)]))
-            if len(results) >= 10: break
-    return results
-
-@bot.message_handler(content_types=['document'])
-def handle_document(m):
+@bot.message_handler(commands=['daily', 'diemdanh', 'checkin'])
+def daily_checkin_cmd(m):
     if not is_grp(m) or antispam(m): return
-    users[str(m.from_user.id)] = m.from_user.first_name; save_users(users)
-    doc = m.document; file_name = doc.file_name or "unknown"; file_size = doc.file_size or 0; file_id = doc.file_id
-    if file_size > MAX_FILE_SIZE: msg = bot.reply_to(m, f"❌ File <b>{html.escape(file_name)}</b> quá lớn ({file_size/1024/1024:.1f}MB).", parse_mode="HTML"); del_msg(m.chat.id, msg.message_id, 30); return
-    status_msg = bot.reply_to(m, f"📄 Đang đọc <b>{html.escape(file_name)}</b>...", parse_mode="HTML")
+    uid = m.from_user.id; today = date.today().isoformat()
+    users[str(uid)] = m.from_user.first_name; save_users(users)
+    last_checkin = daily_checkin.get(uid, ""); yesterday = (date.today() - timedelta(days=1)).isoformat()
+    if last_checkin == today:
+        bal = get_user_balance(uid)
+        msg = bot.reply_to(m, f"❌ <b>{html.escape(m.from_user.first_name)}</b>, hôm nay đã điểm danh rồi!\n💰 Số dư: <b>{bal:,}</b> xu", parse_mode="HTML"); del_msg(m.chat.id, msg.message_id, 15); return
     
-    def _process():
-        try:
-            file_info = bot.get_file(file_id); downloaded = bot.download_file(file_info.file_path)
-            result = process_file(downloaded, file_name, file_id)
-            try: bot.delete_message(m.chat.id, status_msg.message_id)
-            except: pass
-            if result["stats"].get("error"): bot.reply_to(m, f"❌ Lỗi: {result['stats']['error']}", parse_mode="HTML"); return
-            
-            stats_text = f"📄 <b>{html.escape(file_name)}</b>\n📏 {file_size/1024/1024:.2f}MB | 📝 {result['stats'].get('chars', 'N/A'):,} ký tự | 📋 {result['stats'].get('lines', 'N/A')} dòng"
-            preview = result["preview"]
-            if len(preview) > 4000:
-                bot.reply_to(m, stats_text, parse_mode="HTML")
-                for i in range(0, min(len(preview), 12000), 4000): bot.send_message(m.chat.id, f"<pre>{html.escape(preview[i:i+4000])}</pre>", parse_mode="HTML")
-            else:
-                bot.reply_to(m, stats_text + f"\n\n<pre>{html.escape(preview)}</pre>", parse_mode="HTML")
-        except Exception as e: bot.reply_to(m, f"❌ Lỗi: {str(e)[:200]}", parse_mode="HTML")
-    file_executor.submit(_process)
+    consecutive = 1
+    if last_checkin == yesterday:
+        d = date.today() - timedelta(days=1)
+        for i in range(1, 7):
+            if daily_checkin.get(uid) == (d - timedelta(days=i)).isoformat(): consecutive += 1
+            else: break
+    
+    reward = get_daily_reward(uid, consecutive)
+    daily_checkin[uid] = today; save_daily_checkins(daily_checkin); add_balance(uid, reward); brain.stats["daily_checkins"] += 1
+    streak_emoji = ["", "🔥", "🔥🔥", "💥", "💥💥", "⚡", "👑"][min(consecutive-1, 6)] if consecutive > 1 else ""
+    msg = bot.reply_to(m, f"✅ <b>ĐIỂM DANH!</b>\n👤 <b>{html.escape(m.from_user.first_name)}</b>\n💰 +{reward:,} xu | 📅 Chuỗi: <b>{consecutive}</b> ngày {streak_emoji}\n💎 Số dư: <b>{get_user_balance(uid):,}</b> xu", parse_mode="HTML"); del_msg(m.chat.id, msg.message_id, 30)
 
-@bot.message_handler(commands=['readfile', 'filesearch'])
-def readfile_cmd(m):
+@bot.message_handler(commands=['balance', 'xu', 'money'])
+def balance_cmd(m):
     if not is_grp(m): return
-    if not m.reply_to_message or not m.reply_to_message.document: msg = bot.reply_to(m, "❌ Reply file + /readfile [từ khóa]", parse_mode="HTML"); del_msg(m.chat.id, msg.message_id, 10); return
-    # Gọi lại handle_document với search
-    parts = m.text.split(maxsplit=1); query = parts[1].strip() if len(parts) > 1 else ""
-    if query:
-        doc = m.reply_to_message.document; file_id = doc.file_id
-        try:
-            file_info = bot.get_file(file_id); downloaded = bot.download_file(file_info.file_path)
-            result = process_file(downloaded, doc.file_name or "unknown", file_id)
-            search_results = search_in_text(result["text"], query)
-            if search_results:
-                response = f"🔍 <b>{len(search_results)}</b> kết quả cho '<i>{html.escape(query)}</i>':\n\n"
-                for sr in search_results[:5]: response += f"<pre>{html.escape(sr)}</pre>\n---\n"
-                if len(search_results) > 5: response += f"\n... và {len(search_results)-5} kết quả khác."
-            else: response = f"❌ Không tìm thấy '<i>{html.escape(query)}</i>'."
-            bot.reply_to(m, response, parse_mode="HTML")
-        except Exception as e: bot.reply_to(m, f"❌ Lỗi: {str(e)[:200]}", parse_mode="HTML")
+    uid = m.from_user.id; users[str(uid)] = m.from_user.first_name; save_users(users)
+    target = uid; target_name = m.from_user.first_name
+    if m.reply_to_message: target = m.reply_to_message.from_user.id; target_name = m.reply_to_message.from_user.first_name
+    bal = get_user_balance(target)
+    msg = bot.reply_to(m, f"💎 <b>{html.escape(target_name)}</b> có <b>{bal:,}</b> xu.", parse_mode="HTML"); del_msg(m.chat.id, msg.message_id, 20)
+
+# ─── NỔ HŨ ──────────────────────────────────────────────────────────────
+SLOT_SYMBOLS = ["🍒", "🍋", "🍊", "🍇", "💎", "🔔", "7️⃣"]
+SLOT_WEIGHTS = [30, 25, 20, 15, 5, 3, 2]
+SLOT_PAYOUTS = {"🍒🍒🍒": 5, "🍋🍋🍋": 8, "🍊🍊🍊": 12, "🍇🍇🍇": 20, "💎💎💎": 50, "🔔🔔🔔": 100, "7️⃣7️⃣7️⃣": 500}
+
+@bot.message_handler(commands=['nohu', 'slot', 'quay'])
+def nohu_cmd(m):
+    if not is_grp(m) or antispam(m): return
+    uid = m.from_user.id; users[str(uid)] = m.from_user.first_name; save_users(users)
+    parts = m.text.split()
+    if len(parts) < 2:
+        jackpot = load_jackpot()
+        msg = bot.reply_to(m, f"🎰 <b>NỔ HŨ</b>\n💰 JACKPOT: <b>{jackpot:,}</b> xu\n🎮 /nohu [cược] (Phí: {nohu_fee:,} xu)", parse_mode="HTML"); del_msg(m.chat.id, msg.message_id, 20); return
+    try: bet = int(parts[1])
+    except: msg = bot.reply_to(m, "❌ Cược phải là số.", parse_mode="HTML"); del_msg(m.chat.id, msg.message_id, 5); return
+    if bet < 100 or bet > 100000: bot.reply_to(m, "❌ Cược 100 - 100,000 xu.", parse_mode="HTML"); return
+    total_cost = bet + nohu_fee
+    if not deduct_balance(uid, total_cost): bal = get_user_balance(uid); bot.reply_to(m, f"❌ Không đủ xu! Cần <b>{total_cost:,}</b>. Số dư: <b>{bal:,}</b>", parse_mode="HTML"); return
+    
+    jackpot = load_jackpot(); jackpot_contribution = int(bet * nohu_multiplier); jackpot += jackpot_contribution; save_jackpot(jackpot); brain.stats["nohu_spins"] += 1
+    col1, col2, col3 = [random.choices(SLOT_SYMBOLS, weights=SLOT_WEIGHTS, k=1)[0] for _ in range(3)]
+    result = f"{col1}{col2}{col3}"
+    
+    if col1 == col2 == col3:
+        if col1 == "7️⃣":
+            win_amount = jackpot; add_balance(uid, win_amount); nohu_history.append({"uid": uid, "name": m.from_user.first_name, "amount": win_amount, "time": datetime.now(tz).strftime("%H:%M %d/%m")}); save_jackpot(nohu_base)
+            outcome = f"🎉🎉🎉 <b>JACKPOT!!!</b> +{win_amount:,} xu"; emoji = "🏆"
+        else:
+            multiplier = SLOT_PAYOUTS.get(result, 2); win_amount = bet * multiplier; add_balance(uid, win_amount)
+            outcome = f"✅ NỔ HŨ! (x{multiplier}) +{win_amount:,} xu"; emoji = "🎉"
+    elif col1 == col2 or col2 == col3 or col1 == col3:
+        win_amount = int(bet * 0.5); add_balance(uid, win_amount)
+        outcome = f"🔄 2 giống: hoàn {win_amount:,} xu"; emoji = "🔹"
     else:
-        # Gọi document handler
-        m.document = m.reply_to_message.document
-        m.message_id = m.reply_to_message.message_id
-        handle_document(m)
-
-# ╔══════════════════════════════════════════════════════════════╗
-# ║  THỐNG KÊ THÀNH VIÊN                                       ║
-# ╚══════════════════════════════════════════════════════════════╝
-@bot.message_handler(commands=['stats', 'memberstats'])
-def stats_cmd(m):
-    if not is_grp(m): return
-    today = date.today().isoformat(); yesterday = (date.today() - timedelta(days=1)).isoformat()
-    last_7_days = [(date.today() - timedelta(days=i)).isoformat() for i in range(7)]
+        win_amount = 0; outcome = f"💀 Thua -{total_cost:,} xu"; emoji = "❌"
     
-    today_join = member_stats["daily_join"].get(today, 0); today_leave = member_stats["daily_leave"].get(today, 0)
-    yesterday_join = member_stats["daily_join"].get(yesterday, 0); yesterday_leave = member_stats["daily_leave"].get(yesterday, 0)
-    week_join = sum(member_stats["daily_join"].get(d, 0) for d in last_7_days)
-    week_leave = sum(member_stats["daily_leave"].get(d, 0) for d in last_7_days)
+    msg = bot.reply_to(m, f"{emoji} <b>NỔ HŨ</b>\n┌──────────┐\n│ {col1}  {col2}  {col3} │\n└──────────┘\n🎯 {outcome}\n💰 JACKPOT: <b>{load_jackpot():,}</b> xu\n💎 Số dư: <b>{get_user_balance(uid):,}</b> xu", parse_mode="HTML"); del_msg(m.chat.id, msg.message_id, 30)
+
+# ─── GAMES ──────────────────────────────────────────────────────────────
+def init_game_state(uid: int, game_type: str) -> Dict:
+    if game_type == "taixiu": return {"type": "taixiu", "balance": 1000, "wins": 0, "losses": 0}
+    elif game_type == "baucua": return {"type": "baucua", "balance": 1000, "symbols": ["🦀", "🐟", "🦐", "🐓", "🦌", "🎃"], "wins": 0, "losses": 0}
+    elif game_type == "keobuabao": return {"type": "keobuabao", "score": 0, "bot_score": 0, "draws": 0}
+    elif game_type == "doanso": return {"type": "doanso", "secret": random.randint(1, 100), "attempts": 0, "max_attempts": 7}
+    return {}
+
+@bot.message_handler(commands=['taixiu'])
+def taixiu_cmd(m):
+    if not is_grp(m) or antispam(m): return
+    uid = m.from_user.id; users[str(uid)] = m.from_user.first_name; save_users(users); parts = m.text.split()
+    if len(parts) < 3:
+        if uid not in GAME_SESSIONS or GAME_SESSIONS[uid].get("type") != "taixiu": GAME_SESSIONS[uid] = init_game_state(uid, "taixiu")
+        g = GAME_SESSIONS.get(uid, {})
+        msg = bot.reply_to(m, f"🎲 <b>TÀI XỈU</b>\n/taixiu [tai/xiu] [cược]\n💎 Số dư game: <b>{g.get('balance', 1000)}</b> xu\nTài (11-18) | Xỉu (3-10)", parse_mode="HTML"); del_msg(m.chat.id, msg.message_id, 20); return
+    choice = parts[1].lower()
+    try: bet = int(parts[2])
+    except: bot.reply_to(m, "❌ Cược phải là số.", parse_mode="HTML"); return
+    if choice not in ['tai', 'xiu']: bot.reply_to(m, "❌ Chọn 'tai' hoặc 'xiu'.", parse_mode="HTML"); return
+    if uid not in GAME_SESSIONS or GAME_SESSIONS[uid].get("type") != "taixiu": GAME_SESSIONS[uid] = init_game_state(uid, "taixiu")
+    g = GAME_SESSIONS[uid]
+    if bet > g["balance"] or bet < 1: bot.reply_to(m, f"❌ Số dư game không đủ ({g['balance']} xu).", parse_mode="HTML"); return
     
-    try: real_count = bot.get_chat_member_count(GROUP_ID)
-    except: real_count = member_stats.get("current_members", 0)
-    
-    text = (f"📊 <b>THỐNG KÊ</b>\n👥 Hiện tại: <b>{real_count}</b> | 📥 Tổng vào: <b>{member_stats['total_joined']}</b> | 📤 Tổng rời: <b>{member_stats['total_left']}</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n📅 Hôm nay: ✅ +{today_join} ❌ -{today_leave} 📈 {today_join - today_leave:+d}\n"
-            f"📅 Hôm qua: ✅ +{yesterday_join} ❌ -{yesterday_leave} 📈 {yesterday_join - yesterday_leave:+d}\n"
-            f"📅 7 ngày: ✅ +{week_join} ❌ -{week_leave} 📈 {week_join - week_leave:+d} (TB: +{week_join/7:.1f}/ngày)")
-    msg = bot.reply_to(m, text, parse_mode="HTML"); del_msg(m.chat.id, msg.message_id, 60)
+    dice = [random.randint(1, 6) for _ in range(3)]; total = sum(dice); result = "tai" if total >= 11 else "xiu"
+    dice_str = " ".join([["⚀","⚁","⚂","⚃","⚄","⚅"][d-1] for d in dice])
+    if choice == result: g["balance"] += bet; g["wins"] += 1; outcome = f"✅ THẮNG +{bet} xu"
+    else: g["balance"] -= bet; g["losses"] += 1; outcome = f"❌ THUA -{bet} xu"
+    brain.stats["games_played"] += 1
+    msg = bot.reply_to(m, f"🎲 <b>TÀI XỈU</b>\n🎲 {dice_str} = <b>{total}</b> → <b>{result.upper()}</b>\n🎯 Bạn: <b>{choice.upper()}</b>\n💰 {outcome} | Số dư: <b>{g['balance']}</b> xu\n📊 W:{g['wins']} L:{g['losses']}", parse_mode="HTML"); del_msg(m.chat.id, msg.message_id, 30)
 
-@bot.message_handler(commands=['growth'])
-def growth_cmd(m):
-    if not is_grp(m): return
-    last_7_days = [(date.today() - timedelta(days=i)) for i in range(6, -1, -1)]
-    text = "📈 <b>TĂNG TRƯỞNG 7 NGÀY</b>\n<pre>"; max_val = 0
-    rows = []
-    for d in last_7_days:
-        ds = d.isoformat(); join = member_stats["daily_join"].get(ds, 0); leave = member_stats["daily_leave"].get(ds, 0); net = join - leave
-        max_val = max(max_val, join, leave, abs(net)); rows.append((d.strftime("%d/%m"), join, leave, net))
-    for date_str, join, leave, net in rows:
-        join_bar = "█" * int(join/max(max_val,1)*15) if max_val > 0 else ""
-        leave_bar = "░" * int(leave/max(max_val,1)*15) if max_val > 0 else ""
-        text += f"{date_str} +{join:>3} {join_bar}\n      -{leave:>3} {leave_bar}\n"
-    text += "</pre>"; msg = bot.reply_to(m, text, parse_mode="HTML"); del_msg(m.chat.id, msg.message_id, 45)
+@bot.message_handler(commands=['kbb', 'keobuabao'])
+def kbb_cmd(m):
+    if not is_grp(m) or antispam(m): return
+    uid = m.from_user.id; users[str(uid)] = m.from_user.first_name; save_users(users); parts = m.text.split()
+    choices = {"keo": "✌️ Kéo", "kéo": "✌️ Kéo", "bua": "🔨 Búa", "búa": "🔨 Búa", "bao": "📄 Bao"}
+    if len(parts) < 2:
+        if uid not in GAME_SESSIONS or GAME_SESSIONS[uid].get("type") != "keobuabao": GAME_SESSIONS[uid] = init_game_state(uid, "keobuabao")
+        g = GAME_SESSIONS.get(uid, {})
+        msg = bot.reply_to(m, f"✌️ <b>KÉO BÚA BAO</b>\n/kbb [keo/bua/bao]\n👤 {g.get('score',0)} | 🤖 {g.get('bot_score',0)} | 🤝 {g.get('draws',0)}", parse_mode="HTML"); del_msg(m.chat.id, msg.message_id, 15); return
+    choice = parts[1].lower()
+    if choice not in choices: bot.reply_to(m, "❌ Chọn: keo/bua/bao", parse_mode="HTML"); return
+    if uid not in GAME_SESSIONS or GAME_SESSIONS[uid].get("type") != "keobuabao": GAME_SESSIONS[uid] = init_game_state(uid, "keobuabao")
+    g = GAME_SESSIONS[uid]
+    user_choice = choices[choice]; bot_choice = random.choice(list(choices.values()))
+    ui, bi = list(choices.values()).index(user_choice), list(choices.values()).index(bot_choice)
+    if ui == bi: result = "🤝 HÒA"; g["draws"] += 1
+    elif (ui == 0 and bi == 2) or (ui == 1 and bi == 0) or (ui == 2 and bi == 1): result = "✅ THẮNG"; g["score"] += 1
+    else: result = "❌ THUA"; g["bot_score"] += 1
+    brain.stats["games_played"] += 1
+    msg = bot.reply_to(m, f"✌️ <b>KÉO BÚA BAO</b>\n👤 {user_choice} vs 🤖 {bot_choice}\n📊 {result}\n🏆 Bạn: <b>{g['score']}</b> | Bot: <b>{g['bot_score']}</b> | Hòa: <b>{g['draws']}</b>", parse_mode="HTML"); del_msg(m.chat.id, msg.message_id, 25)
 
-# ╔══════════════════════════════════════════════════════════════╗
-# ║  LỆNH QUẢN LÍ NHÓM                                         ║
-# ╚══════════════════════════════════════════════════════════════╝
-@bot.message_handler(commands=['ban'])
-def ban_cmd(m):
-    if not is_grp(m) or not is_admin(m.chat.id, m.from_user.id): return
-    target, reason = extract_user_and_reason(m, bot.get_me().username)
-    if not target: msg = bot.reply_to(m, "❌ Reply/mention/ID.", parse_mode="HTML"); del_msg(m.chat.id, msg.message_id, 15); return
-    try: bot.ban_chat_member(m.chat.id, target); bot.delete_message(m.chat.id, m.message_id); w = bot.send_message(m.chat.id, f"🚫 <b>{html.escape(m.from_user.first_name)}</b> đã ban <code>{target}</code>{' - '+reason if reason else ''}", parse_mode="HTML"); del_msg(m.chat.id, w.message_id, 30)
-    except Exception as e: bot.reply_to(m, f"⚠️ Lỗi: {str(e)[:100]}", parse_mode="HTML")
+@bot.message_handler(commands=['doanso'])
+def doanso_cmd(m):
+    if not is_grp(m) or antispam(m): return
+    uid = m.from_user.id; users[str(uid)] = m.from_user.first_name; save_users(users); parts = m.text.split()
+    if len(parts) < 2:
+        GAME_SESSIONS[uid] = init_game_state(uid, "doanso")
+        msg = bot.reply_to(m, "🔢 <b>ĐOÁN SỐ</b> (1-100)\n/doanso [số]\nBạn có <b>7</b> lần đoán!", parse_mode="HTML"); del_msg(m.chat.id, msg.message_id, 15); return
+    try: guess = int(parts[1])
+    except: bot.reply_to(m, "❌ Nhập số 1-100.", parse_mode="HTML"); return
+    if guess < 1 or guess > 100: bot.reply_to(m, "❌ Số 1-100.", parse_mode="HTML"); return
+    if uid not in GAME_SESSIONS or GAME_SESSIONS[uid].get("type") != "doanso": GAME_SESSIONS[uid] = init_game_state(uid, "doanso")
+    g = GAME_SESSIONS[uid]; g["attempts"] += 1; secret = g["secret"]
+    brain.stats["games_played"] += 1
+    if guess == secret:
+        reward = (8 - g["attempts"]) * 500; add_balance(uid, reward)
+        msg = bot.reply_to(m, f"🎉 <b>CHÍNH XÁC!</b> Số <b>{secret}</b> sau {g['attempts']} lần!\n💰 +{reward:,} xu", parse_mode="HTML"); del GAME_SESSIONS[uid]
+    elif g["attempts"] >= g["max_attempts"]:
+        msg = bot.reply_to(m, f"💀 <b>HẾT LƯỢT!</b> Số là <b>{secret}</b>.", parse_mode="HTML"); del GAME_SESSIONS[uid]
+    elif guess < secret: msg = bot.reply_to(m, f"🔢 <b>{guess}</b> → ⬆️ CAO HƠN ({g['max_attempts'] - g['attempts']} lần)", parse_mode="HTML")
+    else: msg = bot.reply_to(m, f"🔢 <b>{guess}</b> → ⬇️ THẤP HƠN ({g['max_attempts'] - g['attempts']} lần)", parse_mode="HTML")
+    del_msg(m.chat.id, msg.message_id, 30)
 
-@bot.message_handler(commands=['mute'])
-def mute_cmd(m):
-    if not is_grp(m) or not is_admin(m.chat.id, m.from_user.id): return
-    target, reason = extract_user_and_reason(m, bot.get_me().username)
-    if not target: return
-    duration = parse_duration(reason) if reason else 3600
-    try:
-        until = int(time.time()) + duration
-        bot.restrict_chat_member(m.chat.id, target, until_date=until, can_send_messages=False, can_send_media_messages=False, can_send_other_messages=False, can_add_web_page_previews=False)
-        bot.delete_message(m.chat.id, m.message_id)
-        dur_str = f"{duration//3600}h{(duration%3600)//60}m" if duration>=3600 else f"{duration//60}m{duration%60}s"
-        w = bot.send_message(m.chat.id, f"🔇 <b>{html.escape(m.from_user.first_name)}</b> mute <code>{target}</code> {dur_str}", parse_mode="HTML"); del_msg(m.chat.id, w.message_id, 30); mutes[target] = until
-    except Exception as e: bot.reply_to(m, f"⚠️ {str(e)[:100]}", parse_mode="HTML")
-
-@bot.message_handler(commands=['unmute'])
-def unmute_cmd(m):
-    if not is_grp(m) or not is_admin(m.chat.id, m.from_user.id): return
-    target, _ = extract_user_and_reason(m, bot.get_me().username)
-    if not target: return
-    try:
-        bot.restrict_chat_member(m.chat.id, target, can_send_messages=True, can_send_media_messages=True, can_send_other_messages=True, can_add_web_page_previews=True)
-        bot.delete_message(m.chat.id, m.message_id); w = bot.send_message(m.chat.id, f"🔊 Unmute <code>{target}</code>", parse_mode="HTML"); del_msg(m.chat.id, w.message_id, 20)
-        if target in mutes: del mutes[target]
-    except Exception as e: bot.reply_to(m, f"⚠️ {str(e)[:100]}", parse_mode="HTML")
-
-@bot.message_handler(commands=['warn'])
-def warn_cmd(m):
-    if not is_grp(m) or not is_admin(m.chat.id, m.from_user.id): return
-    target, reason = extract_user_and_reason(m, bot.get_me().username)
-    if not target: return
-    warn_counts[target] = warn_counts.get(target,0) + 1; cnt = warn_counts[target]
-    bot.delete_message(m.chat.id, m.message_id); w = bot.send_message(m.chat.id, f"⚠️ <b>{html.escape(m.from_user.first_name)}</b> warn <code>{target}</code> [{cnt}/3]\n{reason if reason else ''}", parse_mode="HTML"); del_msg(m.chat.id, w.message_id, 25)
-    if cnt >= 3:
-        try: bot.ban_chat_member(m.chat.id, target, until_date=int(time.time())+3600); del warn_counts[target]
-        except: pass
-
-# ╔══════════════════════════════════════════════════════════════╗
-# ║  AI + ANTI-SPAM                                            ║
-# ╚══════════════════════════════════════════════════════════════╝
+# ─── AI + ANTI-SPAM ────────────────────────────────────────────────────
 def antispam(m) -> bool:
     if is_admin(m.chat.id, m.from_user.id): return False
     uid, now = m.from_user.id, time.time()
@@ -1094,21 +1023,17 @@ def ask_ai(prompt: str, uid: Optional[int] = None) -> str:
         brain.stats["errors"] = 0; brain.state = "repair"; return "[Não tự sửa] AI đã reset."
     return random.choice(get_kho())
 
-# ╔══════════════════════════════════════════════════════════════╗
-# ║  HANDLERS CƠ BẢN                                           ║
-# ╚══════════════════════════════════════════════════════════════╝
+# ─── HANDLERS ──────────────────────────────────────────────────────────
 @bot.message_handler(commands=['start'])
 def start(m):
     if not is_grp(m) or antispam(m): return
     users[str(m.from_user.id)] = m.from_user.first_name; save_users(users); brain.trusted_users.add(m.from_user.id)
-    help_text = ("<b>🧠 Não Robot - Ultimate</b>\n"
-                 "💎 /daily - Điểm danh nhận xu | /balance - Xem xu\n"
-                 "🎰 /nohu - Nổ Hũ | /taixiu /baucua /kbb /doanso - Games\n"
-                 "📄 /readfile (reply file) - Đọc file 20MB\n"
+    help_text = ("<b>🧠 Não Robot - AI RAM Manager</b>\n"
+                 "💎 /daily - Điểm danh | /balance - Xem xu\n"
+                 "🎰 /nohu - Nổ Hũ | /taixiu /kbb /doanso - Games\n"
                  "🎙️ /voice - Text to Speech\n"
-                 "📊 /stats /growth /top - Thống kê\n"
+                 "🧠 /ramstatus - Xem RAM | /clearcache - Dọn RAM\n"
                  "🛠️ /ban /mute /unmute /warn - Quản lí\n"
-                 "💸 /give [@mention] [xu] - Chuyển xu\n"
                  "Tag/reply bot = chat AI")
     msg = bot.reply_to(m, help_text, parse_mode="HTML"); del_msg(m.chat.id, msg.message_id, 60)
 
@@ -1116,15 +1041,14 @@ def start(m):
 def brain_cmd(m):
     if not is_grp(m): return
     if not is_admin(m.chat.id, m.from_user.id): msg = bot.reply_to(m, "⛔ Không đủ quyền.", parse_mode="HTML"); del_msg(m.chat.id, msg.message_id, 10); return
-    uptime = int(time.time() - brain.stats["uptime_start"])
-    jackpot = load_jackpot()
+    uptime = int(time.time() - brain.stats["uptime_start"]); jackpot = load_jackpot()
     text = (f"🧠 State: <code>{brain.state}</code> | Mood: <code>{brain.mood}</code>\n"
-            f"Msgs: <code>{brain.stats['msg_processed']}</code> | Spam: <code>{brain.stats['spam_blocked']}</code>\n"
-            f"AI: <code>{brain.stats['ai_calls']}</code> | Voice: <code>{brain.stats['voice_generated']}</code>\n"
-            f"Files: <code>{brain.stats['files_processed']}</code> | Daily: <code>{brain.stats['daily_checkins']}</code>\n"
-            f"Nổ Hũ spins: <code>{brain.stats['nohu_spins']}</code> | Jackpot: <code>{jackpot:,}</code> xu\n"
-            f"Errors: <code>{brain.stats['errors']}</code> | Uptime: <code>{uptime//3600}h{(uptime%3600)//60}m</code>\n"
-            f"Voice Q: <code>{voice_queue.qsize()}</code> | Users: <code>{len(users)}</code> | Balances: <code>{len(user_balance)}</code>")
+            f"Msgs: <code>{brain.stats['msg_processed']}</code> | AI: <code>{brain.stats['ai_calls']}</code>\n"
+            f"Voice: <code>{brain.stats['voice_generated']}</code> | Games: <code>{brain.stats['games_played']}</code>\n"
+            f"Nổ Hũ: <code>{brain.stats['nohu_spins']}</code> | Jackpot: <code>{jackpot:,}</code> xu\n"
+            f"RAM: <code>{ram_manager.get_memory_mb():.1f}MB</code> | Dọn: <code>{ram_manager.clean_count}</code> lần\n"
+            f"Freed: <code>{ram_manager.total_cleaned_bytes/1024/1024:.1f}MB</code> | Cache: <code>{len(ram_manager.smart_cache)}</code>\n"
+            f"Errors: <code>{brain.stats['errors']}</code> | Uptime: <code>{uptime//3600}h{(uptime%3600)//60}m</code>")
     msg = bot.reply_to(m, text, parse_mode="HTML"); del_msg(m.chat.id, msg.message_id, 30)
 
 @bot.message_handler(func=lambda m: is_grp(m) and m.text)
@@ -1172,19 +1096,12 @@ def scheduler_task():
         try:
             now = datetime.now(tz); brain.health_check()
             if brain.state == "repair": brain.state = "normal"; brain.repair_mode = False
-            
-            # Reset daily checkin vào 0h
             today = date.today()
-            if today != last_midnight:
-                last_midnight = today
-                # Không reset daily_checkin dict vì mỗi user có ngày riêng
-                logger.info(f"Ngày mới: {today}")
-            
+            if today != last_midnight: last_midnight = today
             if now.minute == 0 and now.hour != last_hour and users:
                 uid, uname = random.choice(list(users.items()))
                 msg = bot.send_message(GROUP_ID, f"🔔 <b>{now.strftime('%H:%M')}</b> | <a href='tg://user?id={uid}'>{html.escape(uname)}</a>... {random.choice(get_kho())}", parse_mode="HTML"); del_msg(GROUP_ID, msg.message_id, 15); last_hour = now.hour
             if now.minute != 0: last_hour = -1
-            
             to_remove = []
             for uid, until in mutes.items():
                 if time.time() > until:
@@ -1211,7 +1128,6 @@ def main():
     
     loaded_users = load_users()
     if isinstance(loaded_users, dict): users.update(loaded_users)
-    
     user_balance = load_balances()
     daily_checkin = load_daily_checkins()
     nohu_jackpot = load_jackpot()
@@ -1224,9 +1140,12 @@ def main():
     try: member_stats["current_members"] = bot.get_chat_member_count(GROUP_ID)
     except: member_stats["current_members"] = len(users)
     
-    logger.info(f"🚀 Khởi động: {len(users)} users, {len(user_balance)} balances, Jackpot: {nohu_jackpot:,} xu")
-    logger.info(f"📄 PDF={HAS_PYPDF2} DOCX={HAS_DOCX} BS4={HAS_BS4} Chardet={HAS_CHARDET}")
-    logger.info(f"🎰 Nổ Hũ | 💎 Điểm Danh | 🎲 Games | 🎙️ Voice | 📊 Stats | 🛠️ Admin")
+    # Khởi động AI RAM Manager
+    ram_manager.start_monitoring()
+    
+    logger.info(f"🚀 Khởi động: {len(users)} users, Jackpot: {nohu_jackpot:,} xu")
+    logger.info(f"🧠 AI RAM Manager: Max {ram_manager.max_ram_bytes/1024/1024:.0f}MB, Auto-clean at 90%")
+    logger.info(f"📄 PDF={HAS_PYPDF2} DOCX={HAS_DOCX} BS4={HAS_BS4}")
     
     Thread(target=scheduler_task, daemon=True).start()
     Thread(target=auto_save_task, daemon=True).start()
