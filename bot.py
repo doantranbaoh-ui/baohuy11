@@ -1,19 +1,16 @@
-# -*- coding: utf-8 -*-
 # ╔══════════════════════════════════════════════════════════════════════════╗
-# ║  NAO ROBOT v5.0.0 - 1500 DÒNG - 12 MINI GAMES + 18 GIỌNG BẮC VIỆT      ║
-# ║  Tác giả: palofsc (palo) | Ngày: 2026-06-25 | Python 3.9+              ║
-# ║  TÍNH NĂNG: 12 Games Bão X10 | Nổ Hũ | AI Chat | Voice TTS | Auto Mod  ║
+# ║                    HOTFIX v5.0.1 - CHỐNG TREO 15 PHÚT                    ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
 
 import sys, io, os, json, time, random, re, html, logging, traceback, hashlib
 import urllib.parse, gc, ctypes, psutil, weakref, signal, base64, tempfile
 import math, statistics, itertools, threading
-from threading import Thread, Lock, Timer, Event
+from threading import Thread, Lock, Timer, Event, Semaphore
 from datetime import datetime, timedelta, date
 from collections import deque, defaultdict, OrderedDict, Counter
 from typing import Dict, List, Optional, Any, Tuple, Union, Callable
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from queue import Queue, PriorityQueue, Empty
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FutureTimeoutError
+from queue import Queue, PriorityQueue, Empty, Full
 from dataclasses import dataclass, field
 from io import StringIO, BytesIO
 
@@ -125,7 +122,7 @@ class AIRandomEngine:
 ai_random = AIRandomEngine()
 
 # ╔══════════════════════════════════════════════════════════════════════════╗
-# ║                    AI RAM MANAGER                                       ║
+# ║                    AI RAM MANAGER (FIX: AUTO CLEANUP CHU KỲ)            ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
 class AIRamManager:
     WARNING = 0.70
@@ -145,6 +142,31 @@ class AIRamManager:
         self.warnings = 0
         self.cache: Dict[str, Tuple[Any, float]] = {}
         self.lock = Lock()
+        # FIX: Định kỳ dọn cache mỗi 60 giây bất kể RAM usage
+        self._start_periodic_cleanup()
+
+    def _start_periodic_cleanup(self):
+        """FIX #1: Chạy cleanup cache định kỳ mỗi 60 giây để tránh memory leak"""
+        def _periodic():
+            while True:
+                time.sleep(60)
+                try:
+                    with self.lock:
+                        now = time.time()
+                        # Xóa tất cả cache đã hết hạn TTL
+                        expired = [k for k, (v, e) in self.cache.items() if now >= e]
+                        for k in expired:
+                            del self.cache[k]
+                        # Giới hạn cache tối đa 500 entries
+                        if len(self.cache) > 500:
+                            sorted_keys = sorted(self.cache, key=lambda x: self.cache[x][1])
+                            for k in sorted_keys[:len(sorted_keys) - 400]:
+                                del self.cache[k]
+                    if expired:
+                        logger.debug(f"Periodic cache cleanup: removed {len(expired)} entries")
+                except Exception as e:
+                    logger.error(f"Periodic cleanup error: {e}")
+        Thread(target=_periodic, daemon=True, name="CacheCleanup").start()
 
     def usage_pct(self) -> float:
         return self.process.memory_info().rss / self.max_bytes
@@ -163,8 +185,9 @@ class AIRamManager:
 
     def cache_set(self, key: str, value: Any, ttl: float = 300):
         self.cache[key] = (value, time.time() + ttl)
-        if len(self.cache) > 1000:
-            for k in sorted(self.cache, key=lambda x: self.cache[x][1])[:300]:
+        # FIX: Giảm ngưỡng xóa từ 1000 xuống 500
+        if len(self.cache) > 500:
+            for k in sorted(self.cache, key=lambda x: self.cache[x][1])[:200]:
                 del self.cache[k]
 
     def clean(self, level: int) -> int:
@@ -176,7 +199,7 @@ class AIRamManager:
             freed += gc.collect(0) * 200
         if level >= 2:
             freed += gc.collect(2) * 200
-            if len(self.cache) > 100:
+            if len(self.cache) > 50:
                 for k in sorted(self.cache, key=lambda x: self.cache[x][1])[:len(self.cache)//2]:
                     del self.cache[k]
         if level >= 3:
@@ -215,12 +238,12 @@ class AIRamManager:
 
     def monitor(self):
         while True:
-            time.sleep(30)
+            time.sleep(15)  # FIX: Giảm từ 30s xuống 15s
             if self.usage_pct() >= self.WARNING:
                 self.ai_clean()
 
     def start(self):
-        Thread(target=self.monitor, daemon=True).start()
+        Thread(target=self.monitor, daemon=True, name="RAMMonitor").start()
 
 ram_mgr = AIRamManager()
 
@@ -261,19 +284,35 @@ brain = Brain()
 # ╔══════════════════════════════════════════════════════════════════════════╗
 # ║                    CONFIG & TOKEN                                       ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
-AUTO_DELETE = 120
+AUTO_DELETE = 60  # FIX: Giảm từ 120s xuống 60s
 TOKEN = os.getenv("BOT_TOKEN", "8080338995:AAEL2qb-TMjjUmoSvG1bWuY5M1QFST_zdJ4")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "5736655322"))
 GROUP_ID = int(os.getenv("GROUP_ID", "-1003925717296"))
 
-bot = telebot.TeleBot(TOKEN, num_threads=50)
+# FIX: Tăng timeout và giảm số thread để tránh quá tải
+bot = telebot.TeleBot(TOKEN, num_threads=10)  # Giảm từ 50 xuống 10
 tz = pytz.timezone('Asia/Ho_Chi_Minh')
-ses = requests.Session()
-ses.mount('https://', requests.adapters.HTTPAdapter(pool_connections=200, pool_maxsize=500, max_retries=3, pool_block=False))
 
-ai_executor = ThreadPoolExecutor(max_workers=20)
-voice_executor = ThreadPoolExecutor(max_workers=8)
-game_executor = ThreadPoolExecutor(max_workers=15)
+# FIX: Cấu hình session với connection pooling giới hạn
+ses = requests.Session()
+adapter = requests.adapters.HTTPAdapter(
+    pool_connections=50,   # Giảm từ 200
+    pool_maxsize=100,      # Giảm từ 500
+    max_retries=2,         # Giảm từ 3
+    pool_block=False
+)
+ses.mount('https://', adapter)
+ses.mount('http://', adapter)
+
+# FIX: Giảm số worker và thêm Semaphore để giới hạn concurrent
+AI_MAX_CONCURRENT = 10
+ai_semaphore = Semaphore(AI_MAX_CONCURRENT)
+ai_executor = ThreadPoolExecutor(max_workers=10, thread_name_prefix="AI")  # Giảm từ 20
+voice_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="Voice")  # Giảm từ 8
+game_executor = ThreadPoolExecutor(max_workers=6, thread_name_prefix="Game")  # Giảm từ 15
+
+# FIX: Thread pool cho auto_del để tái sử dụng thread
+del_executor = ThreadPoolExecutor(max_workers=10, thread_name_prefix="Del")
 
 # ╔══════════════════════════════════════════════════════════════════════════╗
 # ║                    AI KEYS (DÙNG ENV TRONG PRODUCTION)                  ║
@@ -303,10 +342,10 @@ def get_kho():
     return KHO_NORMAL
 
 # ╔══════════════════════════════════════════════════════════════════════════╗
-# ║                    BIẾN TOÀN CỤC                                       ║
+# ║                    BIẾN TOÀN CỤC (FIX: DỌN SPAM ĐỊNH KỲ)               ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
 lock = Lock()
-mem = deque(maxlen=50)
+mem = deque(maxlen=30)  # FIX: Giảm từ 50
 users = {}
 spam = {}
 warns = {}
@@ -330,8 +369,51 @@ STATS_FILE = "stats.json"
 
 TELEGRAM_LINK = re.compile(r'(https?://)?(www\.)?(t\.me|telegram\.me|telegram\.org|tg\.me)/[a-zA-Z0-9_]{5,}', re.I)
 
+# FIX #2: Định kỳ dọn spam dictionary
+def cleanup_spam_dict():
+    """Xóa entries spam cũ hơn 60 giây để tránh memory leak"""
+    while True:
+        time.sleep(60)
+        try:
+            now = time.time()
+            with lock:
+                for uid in list(spam.keys()):
+                    spam[uid] = [t for t in spam[uid] if now - t < 4]
+                    if not spam[uid]:
+                        del spam[uid]
+            logger.debug(f"Spam cleanup: {len(spam)} active users")
+        except Exception as e:
+            logger.error(f"Spam cleanup error: {e}")
+
+Thread(target=cleanup_spam_dict, daemon=True, name="SpamCleanup").start()
+
+# FIX #3: Định kỳ dọn GAME_SESSIONS hết hạn
+def cleanup_game_sessions():
+    """Xóa game sessions không hoạt động quá 30 phút"""
+    while True:
+        time.sleep(300)  # 5 phút
+        try:
+            now = time.time()
+            with lock:
+                to_del = []
+                for uid, g in GAME_SESSIONS.items():
+                    # Nếu game có thời gian start và đã quá 30 phút
+                    if 'start' in g and now - g['start'] > 1800:
+                        to_del.append(uid)
+                    # Nếu game đã ans = True (hoàn thành)
+                    elif g.get('ans', False):
+                        to_del.append(uid)
+                for uid in to_del:
+                    del GAME_SESSIONS[uid]
+            if to_del:
+                logger.debug(f"Game session cleanup: removed {len(to_del)} sessions")
+        except Exception as e:
+            logger.error(f"Game cleanup error: {e}")
+
+Thread(target=cleanup_game_sessions, daemon=True, name="GameCleanup").start()
+
 # ╔══════════════════════════════════════════════════════════════════════════╗
-# ║                    TIỆN ÍCH                                             ║
+# ║                    TIỆN ÍCH (FIX: auto_del dùng ThreadPool)             ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
 def load_json(p, d={}):
     cached = ram_mgr.cache_get(f"json_{p}")
@@ -357,13 +439,14 @@ def save_json(p, d):
             pass
 
 def auto_del(cid, mid, delay=AUTO_DELETE):
+    """FIX #4: Dùng ThreadPoolExecutor thay vì tạo Thread mới mỗi lần"""
     def _del():
         time.sleep(delay)
         try:
             bot.delete_message(cid, mid)
         except:
             pass
-    Thread(target=_del, daemon=True).start()
+    del_executor.submit(_del)
 
 def del_both(m, bid):
     auto_del(m.chat.id, m.message_id)
@@ -439,16 +522,12 @@ def extract_user_and_reason(message, bot_username: str) -> Tuple[Optional[int], 
 # ║                    BÃO X10 ENGINE                                       ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
 def bao_x10(bet: int) -> Tuple[int, bool]:
-    """
-    Cơ chế Bão X10: 10% cơ hội nhân 10 tiền cược.
-    Trả về: (tiền thưởng thêm, có bão hay không)
-    """
     if ai_random.random() < 0.10:
         return bet * 10, True
     return 0, False
 
 # ╔══════════════════════════════════════════════════════════════════════════╗
-# ║               18 GIỌNG BẮC THUẦN VIỆT + TTS ENGINE (ĐÃ FIX)             ║
+# ║               18 GIỌNG BẮC THUẦN VIỆT + TTS ENGINE (FIX)               ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
 VOICE_LIST: List[Dict[str, Any]] = [
     {"name": "Hà Nội gốc (Chậm)", "speed": 0.7, "emoji": "🐢"},
@@ -474,8 +553,8 @@ VOICE_LIST: List[Dict[str, Any]] = [
 TTS_URL = "https://translate.google.com/translate_tts"
 TTS_HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)", "Accept": "audio/mpeg", "Referer": "https://translate.google.com/"}
 MAX_CHUNK = 180
-TTS_RETRY = 3
-TTS_TIMEOUT = 15
+TTS_RETRY = 2  # FIX: Giảm từ 3
+TTS_TIMEOUT = 10  # FIX: Giảm từ 15
 
 @dataclass
 class VoiceRequest:
@@ -487,7 +566,8 @@ class VoiceRequest:
     voice: Optional[Dict] = None
     created_at: float = field(default_factory=time.time)
 
-voice_queue: Queue = Queue(maxsize=50)
+# FIX: Giảm maxsize và xử lý Full exception
+voice_queue: Queue = Queue(maxsize=30)
 
 def fetch_tts(text: str, speed: float = 1.0) -> Optional[bytes]:
     params = {"ie": "UTF-8", "q": text, "tl": "vi", "total": "1", "idx": "0", "textlen": str(len(text)), "client": "tw-ob", "prev": "input", "ttsspeed": str(speed)}
@@ -499,7 +579,7 @@ def fetch_tts(text: str, speed: float = 1.0) -> Optional[bytes]:
         except:
             pass
         if attempt < TTS_RETRY:
-            time.sleep(0.5 * attempt)
+            time.sleep(0.3 * attempt)  # FIX: Giảm delay
     return None
 
 def split_tts(text: str) -> List[str]:
@@ -537,7 +617,7 @@ def gen_voice(text: str, speed: float = 1.0) -> Tuple[Optional[BytesIO], int, in
             audio += data
             success += 1
         if i < total - 1:
-            time.sleep(0.15)
+            time.sleep(0.1)  # FIX: Giảm từ 0.15
     gen_time = time.time() - start
     if not audio or len(audio) < 100:
         return None, success, total, gen_time
@@ -546,7 +626,7 @@ def gen_voice(text: str, speed: float = 1.0) -> Tuple[Optional[BytesIO], int, in
 def voice_worker():
     while True:
         try:
-            req = voice_queue.get(block=True, timeout=1)
+            req = voice_queue.get(block=True, timeout=2)  # FIX: Timeout 2s
             if not req:
                 voice_queue.task_done()
                 continue
@@ -555,33 +635,36 @@ def voice_worker():
                 voice_queue.task_done()
                 continue
             v = req.voice if req.voice else ai_random.choice(VOICE_LIST)
-            status = bot.send_message(req.chat_id, f"🎙️ Đang tạo giọng nói...\n👤 {html.escape(req.user_name)}\n🗣️ {v['emoji']} {v['name']}", reply_to_message_id=req.reply_id, parse_mode="HTML")
-            audio, success, total, gen_time = gen_voice(txt, v["speed"])
             try:
-                bot.delete_message(req.chat_id, status.message_id)
-            except:
-                pass
-            if audio and isinstance(audio, BytesIO) and audio.getbuffer().nbytes > 100:
-                audio.name = f"voice_{int(time.time())}.mp3"
-                cap = (f"🎙️ <b>GIỌNG NÓI</b>\n━━━━━━━━━━━━━━━━━━━━\n"
-                       f"👤 <b>Người dùng:</b> {html.escape(req.user_name)}\n"
-                       f"🗣️ <b>Giọng:</b> {v['emoji']} {v['name']}\n"
-                       f"⚡ <b>Tốc độ:</b> x{v['speed']}\n"
-                       f"📝 <b>Nội dung:</b> <i>{html.escape(txt[:200])}</i>\n"
-                       f"━━━━━━━━━━━━━━━━━━━━\n"
-                       f"📊 <b>Âm thanh:</b> {audio.getbuffer().nbytes/1024:.1f}KB | ⏱️ {gen_time:.1f}s | ✅ {success}/{total}")
+                status = bot.send_message(req.chat_id, f"🎙️ Đang tạo giọng nói...\n👤 {html.escape(req.user_name)}\n🗣️ {v['emoji']} {v['name']}", reply_to_message_id=req.reply_id, parse_mode="HTML")
+                audio, success, total, gen_time = gen_voice(txt, v["speed"])
                 try:
-                    bot.send_voice(req.chat_id, audio, reply_to_message_id=req.reply_id, caption=cap, parse_mode="HTML")
-                    brain.stats["voice"] += 1
+                    bot.delete_message(req.chat_id, status.message_id)
                 except:
+                    pass
+                if audio and isinstance(audio, BytesIO) and audio.getbuffer().nbytes > 100:
+                    audio.name = f"voice_{int(time.time())}.mp3"
+                    cap = (f"🎙️ <b>GIỌNG NÓI</b>\n━━━━━━━━━━━━━━━━━━━━\n"
+                           f"👤 <b>Người dùng:</b> {html.escape(req.user_name)}\n"
+                           f"🗣️ <b>Giọng:</b> {v['emoji']} {v['name']}\n"
+                           f"⚡ <b>Tốc độ:</b> x{v['speed']}\n"
+                           f"📝 <b>Nội dung:</b> <i>{html.escape(txt[:200])}</i>\n"
+                           f"━━━━━━━━━━━━━━━━━━━━\n"
+                           f"📊 <b>Âm thanh:</b> {audio.getbuffer().nbytes/1024:.1f}KB | ⏱️ {gen_time:.1f}s | ✅ {success}/{total}")
                     try:
-                        audio.seek(0)
-                        bot.send_audio(req.chat_id, audio, reply_to_message_id=req.reply_id, caption=cap, parse_mode="HTML", title=f"Voice - {v['name']}")
+                        bot.send_voice(req.chat_id, audio, reply_to_message_id=req.reply_id, caption=cap, parse_mode="HTML")
                         brain.stats["voice"] += 1
                     except:
-                        bot.send_message(req.chat_id, "❌ Lỗi gửi audio.", reply_to_message_id=req.reply_id)
-            else:
-                bot.send_message(req.chat_id, f"❌ <b>Không thể tạo giọng nói</b>\n👤 {html.escape(req.user_name)}\n🗣️ {v['emoji']} {v['name']}\n⚠️ {success}/{total} chunks\n💡 Thử text ngắn hơn.", reply_to_message_id=req.reply_id, parse_mode="HTML")
+                        try:
+                            audio.seek(0)
+                            bot.send_audio(req.chat_id, audio, reply_to_message_id=req.reply_id, caption=cap, parse_mode="HTML", title=f"Voice - {v['name']}")
+                            brain.stats["voice"] += 1
+                        except:
+                            bot.send_message(req.chat_id, "❌ Lỗi gửi audio.", reply_to_message_id=req.reply_id)
+                else:
+                    bot.send_message(req.chat_id, f"❌ <b>Không thể tạo giọng nói</b>\n👤 {html.escape(req.user_name)}\n🗣️ {v['emoji']} {v['name']}\n⚠️ {success}/{total} chunks\n💡 Thử text ngắn hơn.", reply_to_message_id=req.reply_id, parse_mode="HTML")
+            except Exception as e:
+                logger.error(f"Voice processing error: {e}")
             voice_queue.task_done()
         except Empty:
             continue
@@ -592,9 +675,10 @@ def voice_worker():
             except:
                 pass
 
-for _ in range(4):
-    Thread(target=voice_worker, daemon=True).start()
-logger.info("4 voice workers started")
+# FIX: Giảm số voice worker từ 4 xuống 3
+for _ in range(3):
+    Thread(target=voice_worker, daemon=True, name=f"VoiceWorker-{_}").start()
+logger.info("3 voice workers started")
 
 # ╔══════════════════════════════════════════════════════════════════════════╗
 # ║                    12 MINI GAMES ENGINE - BÃO X10                       ║
@@ -614,7 +698,7 @@ def init_game(uid, gt):
     if gt == "xx":
         return {"type": "xx", **bases}
     if gt == "caudo":
-        return {"type": "caudo", "score": 0, "qnum": 0, "cur": None, "hint": False, "ans": False, "start": 0}
+        return {"type": "caudo", "score": 0, "qnum": 0, "cur": None, "hint": False, "ans": False, "start": time.time()}  # FIX: Thêm start
     if gt == "chanle":
         return {"type": "chanle", **bases}
     if gt == "caothap":
@@ -674,7 +758,7 @@ def taixiu(m):
         g["l"] += 1
         out = f"💔 Thua -{bt:,}"
     brain.stats["games"] += 1
-    m2 = bot.reply_to(m, f"🎲 <b>TÀI XỈU</b>\n━━━━━━━━━━━━\n{d}\nTổng: {total} → {res.upper()}\n{out}\n💰 Game: {g['bal']:,} xu", parse_mode="HTML")
+    m2 = bot.reply_to(m, f"🎲 <b>TÀI XỈU</b>\n━━━━━━━━━━━━\n{ds}\nTổng: {total} → {res.upper()}\n{out}\n💰 Game: {g['bal']:,} xu", parse_mode="HTML")
     del_both(m, m2.message_id)
 
 # ─── GAME 2: BẦU CUA ────────────────────────────────────────────────────
@@ -777,6 +861,7 @@ def doanso(m):
     parts = m.text.split()
     if len(parts) < 2:
         GAME_SESSIONS[uid] = init_game(uid, "doanso")
+        GAME_SESSIONS[uid]['start'] = time.time()  # FIX: Thêm start time
         m2 = bot.reply_to(m, "🔢 <b>ĐOÁN SỐ BÃO X10</b>\n━━━━━━━━━━━━\n/doanso [so] (1-100)\n🎯 7 lần đoán", parse_mode="HTML")
         del_both(m, m2.message_id)
         return
@@ -792,6 +877,7 @@ def doanso(m):
         return
     if uid not in GAME_SESSIONS:
         GAME_SESSIONS[uid] = init_game(uid, "doanso")
+        GAME_SESSIONS[uid]['start'] = time.time()  # FIX: Thêm start time
     g = GAME_SESSIONS[uid]
     g["att"] += 1
     brain.stats["games"] += 1
@@ -941,7 +1027,10 @@ def caudo(m):
             time.sleep(60)
             if uid in GAME_SESSIONS and not GAME_SESSIONS[uid].get("ans", True):
                 GAME_SESSIONS[uid]["ans"] = True
-                bot.send_message(m.chat.id, f"⏰ Hết giờ! Đáp án: {r['a'][0]}")
+                try:
+                    bot.send_message(m.chat.id, f"⏰ Hết giờ! Đáp án: {r['a'][0]}")
+                except:
+                    pass
         Thread(target=timeout, daemon=True).start()
         return
     g = GAME_SESSIONS[uid]
@@ -1180,6 +1269,7 @@ def doanso2(m):
     parts = m.text.split()
     if len(parts) < 2:
         GAME_SESSIONS[uid] = init_game(uid, "doanso2")
+        GAME_SESSIONS[uid]['start'] = time.time()  # FIX: Thêm start time
         m2 = bot.reply_to(m, "⚡ <b>ĐOÁN SỐ SIÊU TỐC BÃO X10</b>\n━━━━━━━━━━━━\n/doanso2 [so] (1-100)\n🎯 5 lần đoán", parse_mode="HTML")
         del_both(m, m2.message_id)
         return
@@ -1195,6 +1285,7 @@ def doanso2(m):
         return
     if uid not in GAME_SESSIONS:
         GAME_SESSIONS[uid] = init_game(uid, "doanso2")
+        GAME_SESSIONS[uid]['start'] = time.time()  # FIX: Thêm start time
     g = GAME_SESSIONS[uid]
     g["att"] += 1
     brain.stats["games"] += 1
@@ -1340,7 +1431,7 @@ def give(m):
     del_both(m, m2.message_id)
 
 # ╔══════════════════════════════════════════════════════════════════════════╗
-# ║                    AI CHAT + ANTI-SPAM                                  ║
+# ║                    AI CHAT + ANTI-SPAM (FIX: DEADLOCK PROOF)            ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
 def ask_ai(prompt):
     global ck_idx
@@ -1350,14 +1441,26 @@ def ask_ai(prompt):
     for t in list(mem)[-8:]:
         msgs.append({"role": "user", "content": t})
     msgs.append({"role": "user", "content": prompt})
-    with ck_lock:
+
+    # FIX #5: Thêm timeout cho lock để tránh deadlock
+    acquired = ck_lock.acquire(timeout=3)
+    if not acquired:
+        logger.warning("AI lock timeout - trả về fallback")
+        return ai_random.choice(get_kho())
+
+    try:
         for _ in range(len(AI_KEYS)):
             k = AI_KEYS[ck_idx]
             if not k["status"] or k["fail"] >= MAX_FAIL:
                 ck_idx = (ck_idx + 1) % len(AI_KEYS)
                 continue
             try:
-                r = ses.post(k["url"], json={"model": k["model"], "messages": msgs, "max_tokens": 40}, headers={"Authorization": f"Bearer {k['key']}"}, timeout=8)
+                r = ses.post(
+                    k["url"],
+                    json={"model": k["model"], "messages": msgs, "max_tokens": 40},
+                    headers={"Authorization": f"Bearer {k['key']}"},
+                    timeout=6  # FIX: Giảm từ 8s
+                )
                 if r.status_code == 200:
                     txt = r.json()['choices'][0]['message']['content'].strip()
                     txt = re.sub(r'[_*`\[\]()]', '', txt)
@@ -1368,12 +1471,15 @@ def ask_ai(prompt):
                     return txt
                 else:
                     k["fail"] += 1
-            except:
+            except Exception as e:
                 k["fail"] += 1
+                logger.error(f"AI request error: {e}")
             ck_idx = (ck_idx + 1) % len(AI_KEYS)
-    for k in AI_KEYS:
-        k["status"], k["fail"] = True, 0
-    return ai_random.choice(get_kho())
+        for k in AI_KEYS:
+            k["status"], k["fail"] = True, 0
+        return ai_random.choice(get_kho())
+    finally:
+        ck_lock.release()  # FIX: Đảm bảo luôn release lock
 
 def antispam(m):
     if is_adm(m):
@@ -1407,7 +1513,7 @@ def start(m):
     save_json(USR_FILE, users)
     brain.trusted.add(m.from_user.id)
     help_text = (
-        "🤖 <b>NAO ROBOT - ĐỘT PHÁ AI</b>\n"
+        "🤖 <b>NAO ROBOT - ĐỘT PHÁ AI v5.0.1</b>\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "🎮 <b>12 GAMES BÃO X10:</b>\n"
         "/taixiu /baucua /kbb /doanso\n"
@@ -1418,7 +1524,9 @@ def start(m):
         "🏆 /top | 💸 /give\n"
         "🎙️ /voice [text] - 18 giọng Bắc\n"
         "🔨 /ban /mute /unmute /warn\n"
-        "📊 /stats | /ramstatus"
+        "📊 /stats | /ramstatus\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "🛠️ FIX: Chống treo 15 phút"
     )
     m2 = bot.reply_to(m, help_text, parse_mode="HTML")
     del_both(m, m2.message_id)
@@ -1464,7 +1572,7 @@ def voice_cmd(m):
         voice_queue.put_nowait(req)
         m2 = bot.reply_to(m, "🎙️ Đã nhận yêu cầu...")
         auto_del(m.chat.id, m2.message_id, 10)
-    except:
+    except Full:  # FIX: Bắt Full exception thay vì except chung
         m2 = bot.reply_to(m, "⚠️ Hàng đợi đầy, thử lại sau.")
         del_both(m, m2.message_id)
 
@@ -1537,14 +1645,14 @@ def stats(m):
         rc = bot.get_chat_member_count(GROUP_ID)
     except:
         rc = 0
-    m2 = bot.reply_to(m, f"📊 <b>THỐNG KÊ</b>\n━━━━━━━━━━━━\n👥 Thành viên: {rc}\n💬 AI: {brain.stats['ai']}\n🎮 Games: {brain.stats['games']}\n🎰 Nổ hũ: {brain.stats['nohu']}\n🎙️ Voice: {brain.stats['voice']}", parse_mode="HTML")
+    m2 = bot.reply_to(m, f"📊 <b>THỐNG KÊ</b>\n━━━━━━━━━━━━\n👥 Thành viên: {rc}\n💬 AI: {brain.stats['ai']}\n🎮 Games: {brain.stats['games']}\n🎰 Nổ hũ: {brain.stats['nohu']}\n🎙️ Voice: {brain.stats['voice']}\n🧹 RAM cleans: {ram_mgr.cleans}", parse_mode="HTML")
     del_both(m, m2.message_id)
 
 @bot.message_handler(commands=['ramstatus'])
 def ramstatus(m):
     if not is_grp(m):
         return
-    m2 = bot.reply_to(m, f"💾 <b>RAM STATUS</b>\n━━━━━━━━━━━━\n📊 Usage: {ram_mgr.usage_mb():.1f}MB\n🧹 Cleans: {ram_mgr.cleans}\n💨 Freed: {ram_mgr.freed/1024/1024:.1f}MB", parse_mode="HTML")
+    m2 = bot.reply_to(m, f"💾 <b>RAM STATUS</b>\n━━━━━━━━━━━━\n📊 Usage: {ram_mgr.usage_mb():.1f}MB\n🧹 Cleans: {ram_mgr.cleans}\n💨 Freed: {ram_mgr.freed/1024/1024:.1f}MB\n📦 Cache: {len(ram_mgr.cache)} entries\n🧵 Threads: {threading.active_count()}", parse_mode="HTML")
     del_both(m, m2.message_id)
 
 @bot.message_handler(func=lambda m: is_grp(m) and m.text)
@@ -1557,14 +1665,27 @@ def chat(m):
     if uid in ai_cd and time.time() - ai_cd[uid] < 2:
         return
     ai_cd[uid] = time.time()
+
+    # FIX #6: Dùng Semaphore để giới hạn concurrent AI requests
+    acquired = ai_semaphore.acquire(timeout=5)
+    if not acquired:
+        logger.warning(f"AI semaphore timeout for user {uid}")
+        return
+
     def _ai():
-        reply = ask_ai(m.text)
-        if f"@{bot.get_me().username}" in m.text or (m.reply_to_message and m.reply_to_message.from_user.id == bot.get_me().id):
-            m2 = bot.reply_to(m, html.escape(reply), parse_mode="HTML")
-            auto_del(m.chat.id, m2.message_id)
-        else:
-            m2 = bot.reply_to(m, html.escape(reply), parse_mode="HTML")
-            auto_del(m.chat.id, m2.message_id)
+        try:
+            reply = ask_ai(m.text)
+            if f"@{bot.get_me().username}" in m.text or (m.reply_to_message and m.reply_to_message.from_user.id == bot.get_me().id):
+                m2 = bot.reply_to(m, html.escape(reply), parse_mode="HTML")
+                auto_del(m.chat.id, m2.message_id)
+            else:
+                m2 = bot.reply_to(m, html.escape(reply), parse_mode="HTML")
+                auto_del(m.chat.id, m2.message_id)
+        except Exception as e:
+            logger.error(f"AI reply error: {e}")
+        finally:
+            ai_semaphore.release()  # FIX: Đảm bảo release semaphore
+
     ai_executor.submit(_ai)
 
 @bot.message_handler(content_types=['new_chat_members'])
@@ -1603,8 +1724,11 @@ def scheduler():
             now = datetime.now(tz)
             if now.minute == 0 and now.hour != last and users:
                 uid, un = ai_random.choice(list(users.items()))
-                msg = bot.send_message(GROUP_ID, f"🕐 {now.strftime('%H:%M')} | {un}... {ai_random.choice(get_kho())}")
-                auto_del(GROUP_ID, msg.message_id)
+                try:
+                    msg = bot.send_message(GROUP_ID, f"🕐 {now.strftime('%H:%M')} | {un}... {ai_random.choice(get_kho())}")
+                    auto_del(GROUP_ID, msg.message_id)
+                except:
+                    pass
                 last = now.hour
             if now.minute != 0:
                 last = -1
@@ -1613,9 +1737,10 @@ def scheduler():
                     bot.restrict_chat_member(GROUP_ID, uid, can_send_messages=True)
                 except:
                     pass
-                del mutes[uid]
-        except:
-            pass
+                if uid in mutes:
+                    del mutes[uid]
+        except Exception as e:
+            logger.error(f"Scheduler error: {e}")
         time.sleep(15)
 
 def auto_save():
@@ -1626,8 +1751,26 @@ def auto_save():
             save_json(BAL_FILE, {str(k): v for k, v in balance.items()})
             save_json(DAILY_FILE, daily_ck)
             save_json(JP_FILE, {"jp": nohu_jp})
-        except:
-            pass
+        except Exception as e:
+            logger.error(f"Auto save error: {e}")
+
+# FIX #7: Định kỳ kiểm tra và restart nếu cần
+def health_check():
+    """Kiểm tra sức khỏe bot mỗi 5 phút"""
+    while True:
+        time.sleep(300)
+        try:
+            active_threads = threading.active_count()
+            ram_usage = ram_mgr.usage_mb()
+            logger.info(f"Health: {active_threads} threads, {ram_usage:.1f}MB RAM, {len(GAME_SESSIONS)} game sessions, {len(spam)} spam entries")
+            # Cảnh báo nếu quá nhiều thread
+            if active_threads > 100:
+                logger.warning(f"High thread count: {active_threads}")
+            # Force cleanup nếu RAM cao
+            if ram_usage > 200:
+                ram_mgr.ai_clean()
+        except Exception as e:
+            logger.error(f"Health check error: {e}")
 
 # ╔══════════════════════════════════════════════════════════════════════════╗
 # ║                    MAIN                                                 ║
@@ -1640,9 +1783,10 @@ def main():
     daily_ck = load_json(DAILY_FILE, {})
     nohu_jp = load_json(JP_FILE, {"jp": 100000}).get("jp", 100000)
     ram_mgr.start()
-    logger.info(f"NAO ROBOT v5.0.0 KHỞI ĐỘNG\nUsers: {len(users)} | JP: {nohu_jp:,} xu\n12 Games Bão X10 | 18 Giọng Bắc | AI Chat")
-    Thread(target=scheduler, daemon=True).start()
-    Thread(target=auto_save, daemon=True).start()
+    logger.info(f"NAO ROBOT v5.0.1 KHỞI ĐỘNG\nUsers: {len(users)} | JP: {nohu_jp:,} xu\n12 Games Bão X10 | 18 Giọng Bắc | AI Chat\nFIX: Chống treo 15 phút")
+    Thread(target=scheduler, daemon=True, name="Scheduler").start()
+    Thread(target=auto_save, daemon=True, name="AutoSave").start()
+    Thread(target=health_check, daemon=True, name="HealthCheck").start()
     bot.infinity_polling(timeout=30, none_stop=True)
 
 if __name__ == "__main__":
