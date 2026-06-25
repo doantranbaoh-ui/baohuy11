@@ -717,7 +717,7 @@ def voice_worker():
                     bot.send_message(
                         req.chat_id,
                         f"❌ <b>Không thể tạo giọng nói</b>\n"
-                        f"👤 {html.escape(req.user_name)}\n"
+                        f"👤 {html.escape(req.@user_name)}\n"
                         f"🗣️ {v['emoji']} {v['name']}\n"
                         f"⚠️ {success}/{total} chunks\n"
                         f"💡 Thử text ngắn hơn.",
@@ -2088,7 +2088,7 @@ def start(m):
     save_json(USR_FILE, users)
     brain.trusted.add(m.from_user.id)
     help_text = (
-        "🤖 <b>NAO ROBOT v5.1.0</b>\n"
+        "🤖 <b>NAO ROBOT v5</b>\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "🎮 <b>12 GAMES BÃO X10:</b>\n"
         "/taixiu /baucua /kbb /doanso\n"
