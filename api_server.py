@@ -1,10 +1,11 @@
 from flask import Flask, jsonify, request
+from datetime import date
+import random
 
 app = Flask(__name__)
 users = {}
 balances = {}
 daily = {}
-jackpot = 100000
 
 @app.route('/api/health')
 def health():
@@ -31,21 +32,24 @@ def add_balance():
     balances[uid] = balances.get(uid, 5000) + amount
     return jsonify({"new_balance": balances[uid]})
 
+@app.route('/api/balance/top')
+def top_balances():
+    limit = int(request.args.get('limit', 10))
+    sorted_bal = sorted(balances.items(), key=lambda x: x[1], reverse=True)[:limit]
+    return jsonify({"top": [{"uid": int(k), "balance": v} for k, v in sorted_bal]})
+
 @app.route('/api/users')
 def get_users():
     return jsonify({"users": users})
 
 @app.route('/api/daily/check/<int:uid>')
 def check_daily(uid):
-    from datetime import date
     today = date.today().isoformat()
     claimed = daily.get(str(uid)) == today
     return jsonify({"claimed": claimed})
 
 @app.route('/api/daily/claim', methods=['POST'])
 def claim_daily():
-    from datetime import date
-    import random
     uid = str(request.json['uid'])
     today = date.today().isoformat()
     if daily.get(uid) == today:
@@ -56,4 +60,5 @@ def claim_daily():
     return jsonify({"reward": reward})
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    print("API Server running at http://localhost:5000")
+    app.run(host='0.0.0.0', port=5000, debug=False)
