@@ -1,16 +1,16 @@
-#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# NAO ROBOT V9.0 - QUẢN LÝ NHÓM CHUYÊN NGHIỆP BẰNG AI
-# Hỗ trợ: Nhiều nhóm, Quản lý chặt chẽ, Auto-mod, AI Chat
+# NAO ROBOT V10.0 - Bot quản lý nhóm Telegram đầy đủ
+# Tính năng: Quản lý nhóm, AI Chat, Filter, Từ cấm, Auto-Mod
+# Tác giả: baohuydev
 
 import sys, io, os, json, time, random, re, html, logging, traceback, hashlib
-import urllib.parse, gc, ctypes, psutil, weakref, signal, base64, tempfile
+import urllib.parse, gc, psutil, weakref, signal, base64, tempfile
 import math, statistics, itertools, threading, subprocess, shutil, zipfile
 from threading import Thread, Lock, Timer, Event, Semaphore
 from datetime import datetime, timedelta, date
 from collections import deque, defaultdict, OrderedDict, Counter
 from typing import Dict, List, Optional, Any, Tuple, Union, Callable
-from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FutureTimeoutError
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from queue import Queue, PriorityQueue, Empty, Full
 from dataclasses import dataclass, field
 from io import StringIO, BytesIO
@@ -30,9 +30,7 @@ logger.setLevel(logging.INFO)
 logger.addHandler(log_handler)
 logger.addHandler(console_handler)
 
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
-
+# ─── KEEP ALIVE (cho Replit) ───
 try:
     from keep_alive import keep_alive
     keep_alive()
@@ -46,93 +44,13 @@ import requests
 import pytz
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗
-# ║                    AI RANDOM ENGINE                                         ║
-# ╚══════════════════════════════════════════════════════════════════════════════╝
-class AIRandomEngine:
-    def __init__(self):
-        self.counter = 0
-        self.twister_state = self._init_mt()
-        self.entropy_pool = bytearray(64)
-        self._refresh_entropy()
-
-    def _refresh_entropy(self):
-        sources = [
-            str(time.time_ns()).encode(),
-            str(psutil.Process(os.getpid()).memory_info().rss).encode(),
-            str(psutil.cpu_percent(interval=0.01)).encode(),
-            str(threading.current_thread().ident).encode(),
-            os.urandom(32)
-        ]
-        try:
-            with open('/dev/urandom', 'rb') as f:
-                sources.append(f.read(32))
-        except:
-            pass
-        self.entropy_pool = bytearray(hashlib.sha512(b"".join(sources)).digest())
-
-    def _init_mt(self) -> List[int]:
-        seed = int.from_bytes(os.urandom(8), 'big')
-        mt = [seed & 0xFFFFFFFF]
-        for i in range(1, 624):
-            mt.append((1812433253 * (mt[i-1] ^ (mt[i-1] >> 30)) + i) & 0xFFFFFFFF)
-        return mt
-
-    def _twist(self):
-        for i in range(624):
-            y = (self.twister_state[i] & 0x80000000) + (self.twister_state[(i+1) % 624] & 0x7FFFFFFF)
-            self.twister_state[i] = self.twister_state[(i+397) % 624] ^ (y >> 1)
-            if y % 2 != 0:
-                self.twister_state[i] ^= 0x9908B0DF
-
-    def _mt_random(self) -> int:
-        self.counter += 1
-        if self.counter >= 624:
-            self._twist()
-            self.counter = 0
-        y = self.twister_state[self.counter]
-        y ^= (y >> 11)
-        y ^= (y << 7) & 0x9D2C5680
-        y ^= (y << 15) & 0xEFC60000
-        y ^= (y >> 18)
-        return y & 0xFFFFFFFF
-
-    def _xor_shift(self, x: int) -> int:
-        x ^= (x << 13) & 0xFFFFFFFFFFFFFFFF
-        x ^= (x >> 7)
-        x ^= (x << 17) & 0xFFFFFFFFFFFFFFFF
-        return x & 0xFFFFFFFFFFFFFFFF
-
-    def randint(self, min_val: int, max_val: int) -> int:
-        if min_val >= max_val:
-            return min_val
-        range_size = max_val - min_val + 1
-        mt_val = self._mt_random()
-        xs_val = self._xor_shift(mt_val + self.counter)
-        combined = mt_val ^ xs_val
-        result = min_val + (combined % range_size)
-        if self.counter % 100 == 0:
-            self._refresh_entropy()
-        return result
-
-    def choice(self, items: List[Any]) -> Any:
-        if not items:
-            return None
-        return items[self.randint(0, len(items) - 1)]
-
-    def random(self) -> float:
-        return self.randint(0, 2**53) / (2**53)
-
-ai_random = AIRandomEngine()
-
-# ╔══════════════════════════════════════════════════════════════════════════════╗
 # ║                    CONFIG                                                   ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 AUTO_DELETE = 60
 TOKEN = os.getenv("BOT_TOKEN", "8080338995:AAEL2qb-TMjjUmoSvG1bWuY5M1QFST_zdJ4")
-MASTER_ADMIN = int(os.getenv("MASTER_ADMIN", "5736655322"))  # Admin tối cao, toàn quyền
+MASTER_ADMIN = int(os.getenv("MASTER_ADMIN", "5736655322"))
 
-# ─── QUẢN LÝ NHIỀU NHÓM ──────────────────────────────────────────────────────
-# Cấu trúc: {chat_id: {"name": "...", "admins": [uid, ...], "settings": {...}}}
+# ─── QUẢN LÝ NHIỀU NHÓM ───
 groups_db = {}
 groups_lock = Lock()
 GROUPS_FILE = "groups.json"
@@ -175,7 +93,9 @@ def get_group(gid: int) -> Dict:
                 "allow_media": True,
                 "allow_stickers": True,
                 "allow_gifs": True,
-                "ai_chat": True
+                "ai_chat": True,
+                "filter_enabled": True,
+                "bad_words_enabled": True
             }
         }
         save_groups()
@@ -240,13 +160,6 @@ AI_KEYS = [
         "model": "gpt-4o",
         "status": True,
         "fail": 0
-    },
-    {
-        "key": "fe_oa_49470785c775bae446168ad37488a9997b7f2ffdcd74073d",
-        "url": "https://api.freemodel.dev/v1/chat/completions",
-        "model": "gpt-4o",
-        "status": True,
-        "fail": 0
     }
 ]
 MAX_FAIL = 3
@@ -256,12 +169,76 @@ ck_lock = Lock()
 # ╔══════════════════════════════════════════════════════════════════════════════╗
 # ║                    BAD WORDS + FILTERS                                      ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
-BAD_WORDS = [
+BAD_WORDS_DEFAULT = [
     "lồn", "cặc", "địt", "đụ", "chịch", "vãi lồn", "đmm", "clmm",
-    "dit", "lon", "cac", "dcm", "vcl", "vl", "dm", "cc"
+    "dit", "lon", "cac", "dcm", "vcl", "vl", "dm", "cc", "đéo", "đcm"
 ]
-BAD_WORDS_PATTERN = re.compile(r'\b(' + '|'.join(re.escape(w) for w in BAD_WORDS) + r')\b', re.IGNORECASE)
 
+# Database từ cấm theo nhóm
+bad_words_db: Dict[str, List[str]] = defaultdict(list)
+BAD_WORDS_FILE = "bad_words.json"
+
+def load_bad_words():
+    global bad_words_db
+    try:
+        if os.path.exists(BAD_WORDS_FILE):
+            with open(BAD_WORDS_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                for gid_str, words in data.items():
+                    bad_words_db[gid_str] = words
+            logger.info(f"Loaded bad words for {len(bad_words_db)} groups")
+    except Exception as e:
+        logger.error(f"Lỗi load bad words: {e}")
+        bad_words_db = defaultdict(list)
+
+def save_bad_words():
+    try:
+        with open(BAD_WORDS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(dict(bad_words_db), f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"Lỗi save bad words: {e}")
+
+def get_bad_words(gid: int) -> List[str]:
+    gk_str = str(gid)
+    if gk_str in bad_words_db and bad_words_db[gk_str]:
+        return bad_words_db[gk_str]
+    return BAD_WORDS_DEFAULT.copy()
+
+def get_bad_words_pattern(gid: int):
+    words = get_bad_words(gid)
+    if not words:
+        return None
+    return re.compile(r'\b(' + '|'.join(re.escape(w) for w in words) + r')\b', re.IGNORECASE)
+
+load_bad_words()
+
+# Database filter theo nhóm
+filters_db: Dict[str, Dict[str, Dict]] = defaultdict(dict)
+FILTERS_FILE = "filters.json"
+
+def load_filters():
+    global filters_db
+    try:
+        if os.path.exists(FILTERS_FILE):
+            with open(FILTERS_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                for gid_str, filters in data.items():
+                    filters_db[gid_str] = filters
+            logger.info(f"Loaded filters for {len(filters_db)} groups")
+    except Exception as e:
+        logger.error(f"Lỗi load filters: {e}")
+        filters_db = defaultdict(dict)
+
+def save_filters():
+    try:
+        with open(FILTERS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(dict(filters_db), f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"Lỗi save filters: {e}")
+
+load_filters()
+
+# Link patterns
 TELEGRAM_LINK = re.compile(r'(https?://)?(www\.)?(t\.me|telegram\.me|telegram\.org|tg\.me)/[a-zA-Z0-9_]{5,}', re.I)
 ALL_LINKS = re.compile(r'https?://\S+', re.I)
 
@@ -292,7 +269,7 @@ def phan_loai_tin_nhan(van_ban: str) -> str:
     return "mac_dinh"
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗
-# ║                    QUẢN LÝ NHÓM - DATABASE                                  ║
+# ║                    QUẢN LÝ DỮ LIỆU NGƯỜI DÙNG                              ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 warns: Dict[str, Dict[int, int]] = defaultdict(lambda: defaultdict(int))
 mutes: Dict[str, Dict[int, float]] = defaultdict(dict)
@@ -367,35 +344,29 @@ def extract_target(message) -> Tuple[Optional[int], str]:
     return target, reason
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗
-# ║                    QUẢN LÝ NHÓM - THÊM NHÓM                                ║
+# ║                    LỆNH QUẢN LÝ NHÓM                                       ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 @bot.message_handler(commands=['addgroup'])
 def add_group_cmd(m):
-    """Thêm nhóm mới bằng ID - Chỉ Master Admin"""
     if m.from_user.id != MASTER_ADMIN:
         m2 = bot.reply_to(m, "❌ Chỉ Master Admin mới có quyền!")
         del_both(m, m2.message_id)
         return
-    
     parts = m.text.split()
     if len(parts) < 2:
-        m2 = bot.reply_to(m, "❌ /addgroup [group_id]\nVí dụ: /addgroup -1001234567890")
+        m2 = bot.reply_to(m, "❌ /addgroup [group_id]")
         del_both(m, m2.message_id)
         return
-    
     try:
         gid = int(parts[1])
     except:
         m2 = bot.reply_to(m, "❌ ID nhóm không hợp lệ!")
         del_both(m, m2.message_id)
         return
-    
     try:
         chat_info = bot.get_chat(gid)
         g = get_group(gid)
         g["name"] = chat_info.title
-        
-        # Thử lấy danh sách admin của nhóm
         try:
             admins = bot.get_chat_administrators(gid)
             for a in admins:
@@ -403,170 +374,110 @@ def add_group_cmd(m):
                     g["admins"].append(a.user.id)
         except:
             pass
-        
         save_groups()
-        
         m2 = bot.reply_to(m,
-            f"✅ ĐÃ THÊM NHÓM\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"✅ ĐÃ THÊM NHÓM\n━━━━━━━━━━━━━━━━━━━━\n"
             f"📛 Tên: {html.escape(chat_info.title)}\n"
-            f"🆔 ID: <code>{gid}</code>\n"
-            f"👥 Thành viên: {chat_info.get('member_count', '?')}\n"
-            f"👑 Admins: {len(g['admins'])}",
+            f"🆔 ID: <code>{gid}</code>",
             parse_mode="HTML"
         )
         del_both(m, m2.message_id)
-        
-        # Gửi thông báo vào nhóm mới
         try:
             bot.send_message(gid, "🤖 Bot đã được thêm vào nhóm!\nDùng /start để xem lệnh.")
         except:
             pass
-            
     except Exception as e:
-        m2 = bot.reply_to(m, f"❌ Lỗi: {str(e)[:100]}\n\nĐảm bảo bot đã được thêm vào nhóm!")
+        m2 = bot.reply_to(m, f"❌ Lỗi: {str(e)[:100]}")
         del_both(m, m2.message_id)
 
 @bot.message_handler(commands=['removegroup'])
 def remove_group_cmd(m):
-    """Xóa nhóm khỏi database - Chỉ Master Admin"""
     if m.from_user.id != MASTER_ADMIN:
         m2 = bot.reply_to(m, "❌ Chỉ Master Admin mới có quyền!")
         del_both(m, m2.message_id)
         return
-    
     parts = m.text.split()
     if len(parts) < 2:
         m2 = bot.reply_to(m, "❌ /removegroup [group_id]")
         del_both(m, m2.message_id)
         return
-    
     try:
         gid = str(int(parts[1]))
         if gid in groups_db:
-            name = groups_db[gid].get("name", "")
             del groups_db[gid]
             save_groups()
-            m2 = bot.reply_to(m, f"✅ Đã xóa nhóm: {html.escape(name)} ({gid})", parse_mode="HTML")
+            m2 = bot.reply_to(m, f"✅ Đã xóa nhóm: {gid}")
         else:
-            m2 = bot.reply_to(m, "❌ Nhóm không tồn tại trong database!")
+            m2 = bot.reply_to(m, "❌ Nhóm không tồn tại!")
         del_both(m, m2.message_id)
-    except Exception as e:
-        m2 = bot.reply_to(m, f"❌ Lỗi: {str(e)[:100]}")
-        del_both(m, m2.message_id)
+    except:
+        pass
 
 @bot.message_handler(commands=['groups'])
 def list_groups_cmd(m):
-    """Liệt kê tất cả nhóm - Chỉ Master Admin"""
     if m.from_user.id != MASTER_ADMIN:
         m2 = bot.reply_to(m, "❌ Chỉ Master Admin mới có quyền!")
         del_both(m, m2.message_id)
         return
-    
     if not groups_db:
         m2 = bot.reply_to(m, "❌ Chưa có nhóm nào!")
         del_both(m, m2.message_id)
         return
-    
     text = "📋 DANH SÁCH NHÓM\n━━━━━━━━━━━━━━━━━━━━\n"
     for gid_str, g in groups_db.items():
         text += f"📛 {html.escape(g.get('name', '?'))}\n"
-        text += f"🆔 <code>{gid_str}</code>\n"
-        text += f"👑 Admins: {len(g.get('admins', []))}\n\n"
-    
+        text += f"🆔 <code>{gid_str}</code>\n\n"
     m2 = bot.reply_to(m, text, parse_mode="HTML")
     del_both(m, m2.message_id)
 
-# ╔══════════════════════════════════════════════════════════════════════════════╗
-# ║                    QUẢN LÝ ADMIN NHÓM                                      ║
-# ╚══════════════════════════════════════════════════════════════════════════════╝
+# ─── QUẢN LÝ ADMIN NHÓM ───
 @bot.message_handler(commands=['addadmin'])
 def add_admin_cmd(m):
-    """Thêm admin cho nhóm hiện tại"""
     gid = m.chat.id
     if m.from_user.id != MASTER_ADMIN and not is_admin(m.from_user.id, gid):
-        m2 = bot.reply_to(m, "❌ Bạn không có quyền thêm admin!")
+        m2 = bot.reply_to(m, "❌ Bạn không có quyền!")
         del_both(m, m2.message_id)
         return
-    
     target, _ = extract_target(m)
     if not target:
-        m2 = bot.reply_to(m, "❌ /addadmin [user_id/@username] hoặc reply")
+        m2 = bot.reply_to(m, "❌ /addadmin [user] hoặc reply")
         del_both(m, m2.message_id)
         return
-    
     add_group_admin(gid, target)
-    target_name = get_user_name(target)
-    
-    m2 = bot.reply_to(m,
-        f"✅ ĐÃ THÊM ADMIN\n"
-        f"👤 {html.escape(target_name)}\n"
-        f"🆔 <code>{target}</code>",
-        parse_mode="HTML"
-    )
+    m2 = bot.reply_to(m, f"✅ Đã thêm admin: <code>{target}</code>", parse_mode="HTML")
     del_both(m, m2.message_id)
 
 @bot.message_handler(commands=['removeadmin'])
 def remove_admin_cmd(m):
-    """Xóa admin khỏi nhóm hiện tại"""
     gid = m.chat.id
     if m.from_user.id != MASTER_ADMIN:
-        m2 = bot.reply_to(m, "❌ Chỉ Master Admin mới có quyền xóa admin!")
+        m2 = bot.reply_to(m, "❌ Chỉ Master Admin mới có quyền!")
         del_both(m, m2.message_id)
         return
-    
     target, _ = extract_target(m)
     if not target:
-        m2 = bot.reply_to(m, "❌ /removeadmin [user_id/@username] hoặc reply")
+        m2 = bot.reply_to(m, "❌ /removeadmin [user] hoặc reply")
         del_both(m, m2.message_id)
         return
-    
-    if target == MASTER_ADMIN:
-        m2 = bot.reply_to(m, "❌ Không thể xóa Master Admin!")
-        del_both(m, m2.message_id)
-        return
-    
     remove_group_admin(gid, target)
-    target_name = get_user_name(target)
-    
-    m2 = bot.reply_to(m,
-        f"✅ ĐÃ XÓA ADMIN\n"
-        f"👤 {html.escape(target_name)}\n"
-        f"🆔 <code>{target}</code>",
-        parse_mode="HTML"
-    )
+    m2 = bot.reply_to(m, f"✅ Đã xóa admin: <code>{target}</code>", parse_mode="HTML")
     del_both(m, m2.message_id)
 
 @bot.message_handler(commands=['admins'])
 def list_admins_cmd(m):
-    """Liệt kê admin của nhóm"""
     gid = m.chat.id
     g = get_group(gid)
-    
-    text = "👑 DANH SÁCH ADMIN NHÓM\n━━━━━━━━━━━━━━━━━━━━\n"
+    text = "👑 DANH SÁCH ADMIN\n━━━━━━━━━━━━━━━━━━━━\n"
     for uid in g.get("admins", []):
         name = get_user_name(uid)
         if uid == MASTER_ADMIN:
             text += f"⭐ {html.escape(name)} - <code>{uid}</code> (Master)\n"
         else:
             text += f"👤 {html.escape(name)} - <code>{uid}</code>\n"
-    
-    try:
-        chat_admins = bot.get_chat_administrators(gid)
-        text += "\n📋 ADMIN TELEGRAM:\n"
-        for a in chat_admins:
-            if a.user.id not in g.get("admins", []):
-                text += f"• {html.escape(a.user.first_name)} - <code>{a.user.id}</code>\n"
-    except:
-        pass
-    
     m2 = bot.reply_to(m, text, parse_mode="HTML")
     del_both(m, m2.message_id)
 
-# ╔══════════════════════════════════════════════════════════════════════════════╗
-# ║                    QUẢN LÝ THÀNH VIÊN - MUTE/BAN/KICK/WARN                 ║
-# ╚══════════════════════════════════════════════════════════════════════════════╝
-
+# ─── LỆNH MUTE/BAN/KICK/WARN ───
 @bot.message_handler(commands=['mute'])
 def mute_cmd(m):
     gid = m.chat.id
@@ -574,43 +485,29 @@ def mute_cmd(m):
         m2 = bot.reply_to(m, "❌ Bạn không có quyền mute!")
         del_both(m, m2.message_id)
         return
-    
     target, reason = extract_target(m)
     if not target:
-        m2 = bot.reply_to(m, "❌ /mute [user] [thời_gian] [lý_do]\nHoặc reply + /mute [thời_gian] [lý_do]")
+        m2 = bot.reply_to(m, "❌ /mute [user] [thời_gian] [lý_do]")
         del_both(m, m2.message_id)
         return
-    
     if is_admin(target, gid):
         m2 = bot.reply_to(m, "❌ Không thể mute admin!")
         del_both(m, m2.message_id)
         return
-    
     duration = parse_duration(reason) if reason else 3600
     until_time = int(time.time()) + duration
-    
     try:
         bot.restrict_chat_member(gid, target, until_date=until_time, can_send_messages=False)
         mutes[gk(gid)][target] = time.time() + duration
-        
-        target_name = get_user_name(target)
         time_str = f"{duration // 86400}d" if duration >= 86400 else f"{duration // 3600}h" if duration >= 3600 else f"{duration // 60}m" if duration >= 60 else f"{duration}s"
-        
         m2 = bot.reply_to(m,
-            f"🔇 MUTE\n━━━━━━━━━━━━━━━━━━━━\n"
-            f"👤 {html.escape(target_name)}\n"
+            f"🔇 MUTE\n"
+            f"👤 {html.escape(get_user_name(target))}\n"
             f"⏰ {time_str}\n"
-            f"📝 {reason or 'Không có lý do'}\n"
-            f"👮 {html.escape(m.from_user.first_name)}",
+            f"📝 {reason or 'Không có lý do'}",
             parse_mode="HTML"
         )
         del_both(m, m2.message_id)
-        
-        try:
-            bot.send_message(target, f"⚠️ Bạn bị mute {time_str} tại nhóm {html.escape(m.chat.title)}\nLý do: {reason or 'Không có'}")
-        except:
-            pass
-            
     except Exception as e:
         m2 = bot.reply_to(m, f"❌ Lỗi: {str(e)[:100]}")
         del_both(m, m2.message_id)
@@ -619,33 +516,23 @@ def mute_cmd(m):
 def unmute_cmd(m):
     gid = m.chat.id
     if not is_admin(m.from_user.id, gid):
-        m2 = bot.reply_to(m, "❌ Bạn không có quyền unmute!")
+        m2 = bot.reply_to(m, "❌ Bạn không có quyền!")
         del_both(m, m2.message_id)
         return
-    
     target, _ = extract_target(m)
     if not target:
         m2 = bot.reply_to(m, "❌ /unmute [user] hoặc reply")
         del_both(m, m2.message_id)
         return
-    
     try:
         bot.restrict_chat_member(gid, target, can_send_messages=True, can_send_media_messages=True,
                                 can_send_other_messages=True, can_add_web_page_previews=True)
         if target in mutes[gk(gid)]:
             del mutes[gk(gid)][target]
-        
-        target_name = get_user_name(target)
-        m2 = bot.reply_to(m,
-            f"🔊 UNMUTE\n"
-            f"👤 {html.escape(target_name)}\n"
-            f"👮 {html.escape(m.from_user.first_name)}",
-            parse_mode="HTML"
-        )
+        m2 = bot.reply_to(m, f"🔊 Đã unmute: {html.escape(get_user_name(target))}", parse_mode="HTML")
         del_both(m, m2.message_id)
-    except Exception as e:
-        m2 = bot.reply_to(m, f"❌ Lỗi: {str(e)[:100]}")
-        del_both(m, m2.message_id)
+    except:
+        pass
 
 @bot.message_handler(commands=['ban'])
 def ban_cmd(m):
@@ -654,51 +541,34 @@ def ban_cmd(m):
         m2 = bot.reply_to(m, "❌ Bạn không có quyền ban!")
         del_both(m, m2.message_id)
         return
-    
     target, reason = extract_target(m)
     if not target:
-        m2 = bot.reply_to(m, "❌ /ban [user] [thời_gian] [lý_do]\nHoặc reply + /ban [thời_gian] [lý_do]")
+        m2 = bot.reply_to(m, "❌ /ban [user] [thời_gian] [lý_do]")
         del_both(m, m2.message_id)
         return
-    
     if is_admin(target, gid):
         m2 = bot.reply_to(m, "❌ Không thể ban admin!")
         del_both(m, m2.message_id)
         return
-    
     duration = parse_duration(reason) if reason else 86400
     until_time = int(time.time()) + duration
-    
     try:
         bot.ban_chat_member(gid, target, until_date=until_time)
-        
-        # Lưu lịch sử ban
         ban_history[gk(gid)].append({
-            "uid": target,
-            "name": get_user_name(target),
-            "by": m.from_user.id,
-            "by_name": m.from_user.first_name,
-            "time": time.time(),
-            "duration": duration,
-            "reason": reason
+            "uid": target, "name": get_user_name(target),
+            "by": m.from_user.id, "by_name": m.from_user.first_name,
+            "time": time.time(), "duration": duration, "reason": reason
         })
-        
-        target_name = get_user_name(target)
+        warns[gk(gid)][target] = 0
         time_str = f"{duration // 86400}d" if duration >= 86400 else f"{duration // 3600}h" if duration >= 3600 else f"{duration // 60}m"
-        
         m2 = bot.reply_to(m,
-            f"🚫 BAN\n━━━━━━━━━━━━━━━━━━━━\n"
-            f"👤 {html.escape(target_name)}\n"
+            f"🚫 BAN\n"
+            f"👤 {html.escape(get_user_name(target))}\n"
             f"⏰ {time_str}\n"
-            f"📝 {reason or 'Không có lý do'}\n"
-            f"👮 {html.escape(m.from_user.first_name)}",
+            f"📝 {reason or 'Không có lý do'}",
             parse_mode="HTML"
         )
         del_both(m, m2.message_id)
-        
-        # Reset warns
-        warns[gk(gid)][target] = 0
-        
     except Exception as e:
         m2 = bot.reply_to(m, f"❌ Lỗi: {str(e)[:100]}")
         del_both(m, m2.message_id)
@@ -707,71 +577,55 @@ def ban_cmd(m):
 def unban_cmd(m):
     gid = m.chat.id
     if not is_admin(m.from_user.id, gid):
-        m2 = bot.reply_to(m, "❌ Bạn không có quyền unban!")
+        m2 = bot.reply_to(m, "❌ Bạn không có quyền!")
         del_both(m, m2.message_id)
         return
-    
     parts = m.text.split()
     if len(parts) < 2:
         m2 = bot.reply_to(m, "❌ /unban [user_id]")
         del_both(m, m2.message_id)
         return
-    
     try:
         target = int(parts[1])
         bot.unban_chat_member(gid, target)
-        
-        m2 = bot.reply_to(m,
-            f"✅ UNBAN\n"
-            f"👤 ID: <code>{target}</code>\n"
-            f"👮 {html.escape(m.from_user.first_name)}",
-            parse_mode="HTML"
-        )
+        m2 = bot.reply_to(m, f"✅ Đã unban: <code>{target}</code>", parse_mode="HTML")
         del_both(m, m2.message_id)
-    except Exception as e:
-        m2 = bot.reply_to(m, f"❌ Lỗi: {str(e)[:100]}")
-        del_both(m, m2.message_id)
+    except:
+        pass
 
 @bot.message_handler(commands=['warn'])
 def warn_cmd(m):
     gid = m.chat.id
     if not is_admin(m.from_user.id, gid):
-        m2 = bot.reply_to(m, "❌ Bạn không có quyền warn!")
+        m2 = bot.reply_to(m, "❌ Bạn không có quyền!")
         del_both(m, m2.message_id)
         return
-    
     target, reason = extract_target(m)
     if not target:
-        m2 = bot.reply_to(m, "❌ /warn [user] [lý_do] hoặc reply")
+        m2 = bot.reply_to(m, "❌ /warn [user] [lý_do]")
         del_both(m, m2.message_id)
         return
-    
     if is_admin(target, gid):
         m2 = bot.reply_to(m, "❌ Không thể warn admin!")
         del_both(m, m2.message_id)
         return
-    
     warn_limit = get_group_setting(gid, "warn_limit", 3)
     warns[gk(gid)][target] += 1
     current_warns = warns[gk(gid)][target]
-    target_name = get_user_name(target)
-    
     action_text = ""
     if current_warns >= warn_limit:
         warn_ban_duration = get_group_setting(gid, "warn_ban_duration", 3600)
         try:
             bot.ban_chat_member(gid, target, until_date=int(time.time()) + warn_ban_duration)
-            action_text = f"\n🚫 AUTO-BAN {warn_ban_duration // 3600}h (đủ {warn_limit} warn)"
+            action_text = f"\n🚫 AUTO-BAN {warn_ban_duration // 3600}h"
             warns[gk(gid)][target] = 0
         except:
-            action_text = "\n⚠️ Không thể auto-ban (thiếu quyền)"
-    
+            action_text = "\n⚠️ Không thể auto-ban"
     m2 = bot.reply_to(m,
-        f"⚠️ WARN\n━━━━━━━━━━━━━━━━━━━━\n"
-        f"👤 {html.escape(target_name)}\n"
+        f"⚠️ WARN\n"
+        f"👤 {html.escape(get_user_name(target))}\n"
         f"📊 {current_warns}/{warn_limit}\n"
-        f"📝 {reason or 'Không có lý do'}\n"
-        f"👮 {html.escape(m.from_user.first_name)}{action_text}",
+        f"📝 {reason or 'Không có lý do'}{action_text}",
         parse_mode="HTML"
     )
     del_both(m, m2.message_id)
@@ -780,92 +634,59 @@ def warn_cmd(m):
 def unwarn_cmd(m):
     gid = m.chat.id
     if not is_admin(m.from_user.id, gid):
-        m2 = bot.reply_to(m, "❌ Bạn không có quyền unwarn!")
+        m2 = bot.reply_to(m, "❌ Bạn không có quyền!")
         del_both(m, m2.message_id)
         return
-    
     target, _ = extract_target(m)
     if not target:
         m2 = bot.reply_to(m, "❌ /unwarn [user] hoặc reply")
         del_both(m, m2.message_id)
         return
-    
     warns[gk(gid)][target] = max(0, warns[gk(gid)][target] - 1)
-    target_name = get_user_name(target)
-    
-    m2 = bot.reply_to(m,
-        f"✅ UNWARN\n"
-        f"👤 {html.escape(target_name)}\n"
-        f"📊 Còn: {warns[gk(gid)][target]}/3\n"
-        f"👮 {html.escape(m.from_user.first_name)}",
-        parse_mode="HTML"
-    )
+    m2 = bot.reply_to(m, f"✅ Còn {warns[gk(gid)][target]}/3 warn", parse_mode="HTML")
     del_both(m, m2.message_id)
 
 @bot.message_handler(commands=['warns'])
 def check_warns_cmd(m):
     gid = m.chat.id
     target = m.reply_to_message.from_user.id if m.reply_to_message else m.from_user.id
-    target_name = get_user_name(target)
     count = warns[gk(gid)].get(target, 0)
-    
-    m2 = bot.reply_to(m,
-        f"📊 WARNS\n"
-        f"👤 {html.escape(target_name)}\n"
-        f"⚠️ {count}/{get_group_setting(gid, 'warn_limit', 3)}",
-        parse_mode="HTML"
-    )
+    m2 = bot.reply_to(m, f"📊 {html.escape(get_user_name(target))}: {count}/3 warn", parse_mode="HTML")
     del_both(m, m2.message_id)
 
 @bot.message_handler(commands=['kick'])
 def kick_cmd(m):
     gid = m.chat.id
     if not is_admin(m.from_user.id, gid):
-        m2 = bot.reply_to(m, "❌ Bạn không có quyền kick!")
+        m2 = bot.reply_to(m, "❌ Bạn không có quyền!")
         del_both(m, m2.message_id)
         return
-    
     target, reason = extract_target(m)
     if not target:
-        m2 = bot.reply_to(m, "❌ /kick [user] [lý_do] hoặc reply")
+        m2 = bot.reply_to(m, "❌ /kick [user] [lý_do]")
         del_both(m, m2.message_id)
         return
-    
     if is_admin(target, gid):
         m2 = bot.reply_to(m, "❌ Không thể kick admin!")
         del_both(m, m2.message_id)
         return
-    
-    target_name = get_user_name(target)
-    
     try:
         bot.ban_chat_member(gid, target)
         time.sleep(1)
         bot.unban_chat_member(gid, target)
-        
-        m2 = bot.reply_to(m,
-            f"👢 KICK\n"
-            f"👤 {html.escape(target_name)}\n"
-            f"📝 {reason or 'Không có lý do'}\n"
-            f"👮 {html.escape(m.from_user.first_name)}",
-            parse_mode="HTML"
-        )
+        m2 = bot.reply_to(m, f"👢 Đã kick: {html.escape(get_user_name(target))}", parse_mode="HTML")
         del_both(m, m2.message_id)
-    except Exception as e:
-        m2 = bot.reply_to(m, f"❌ Lỗi: {str(e)[:100]}")
-        del_both(m, m2.message_id)
+    except:
+        pass
 
-# ╔══════════════════════════════════════════════════════════════════════════════╗
-# ║                    QUẢN LÝ TIN NHẮN                                        ║
-# ╚══════════════════════════════════════════════════════════════════════════════╝
+# ─── LỆNH QUẢN LÝ TIN NHẮN ───
 @bot.message_handler(commands=['del'])
 def del_cmd(m):
     gid = m.chat.id
     if not is_admin(m.from_user.id, gid):
-        m2 = bot.reply_to(m, "❌ Bạn không có quyền xóa tin nhắn!")
+        m2 = bot.reply_to(m, "❌ Bạn không có quyền!")
         del_both(m, m2.message_id)
         return
-    
     if m.reply_to_message:
         try:
             bot.delete_message(gid, m.reply_to_message.message_id)
@@ -879,61 +700,48 @@ def del_cmd(m):
 
 @bot.message_handler(commands=['purge'])
 def purge_cmd(m):
-    """Xóa nhiều tin nhắn cùng lúc"""
     gid = m.chat.id
     if not is_admin(m.from_user.id, gid):
         m2 = bot.reply_to(m, "❌ Bạn không có quyền!")
         del_both(m, m2.message_id)
         return
-    
     if not m.reply_to_message:
-        m2 = bot.reply_to(m, "❌ Reply tin nhắn đầu tiên cần xóa!\n/purge (reply) [số_lượng]")
+        m2 = bot.reply_to(m, "❌ Reply tin nhắn đầu tiên cần xóa!")
         del_both(m, m2.message_id)
         return
-    
     parts = m.text.split()
     count = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 100
     count = min(count, 500)
-    
     try:
-        msg_ids = [m.reply_to_message.message_id]
-        for i in range(1, count):
-            msg_ids.append(m.reply_to_message.message_id + i)
+        msg_ids = [m.reply_to_message.message_id + i for i in range(count)]
         bot.delete_messages(gid, msg_ids)
-        m2 = bot.reply_to(m, f"✅ Đã xóa {len(msg_ids)} tin nhắn!")
+        m2 = bot.reply_to(m, f"✅ Đã xóa {count} tin nhắn!")
         del_both(m, m2.message_id)
-    except Exception as e:
-        m2 = bot.reply_to(m, f"❌ Lỗi: {str(e)[:100]}")
-        del_both(m, m2.message_id)
+    except:
+        pass
 
 @bot.message_handler(commands=['pin'])
 def pin_cmd(m):
     gid = m.chat.id
     if not is_admin(m.from_user.id, gid):
-        m2 = bot.reply_to(m, "❌ Bạn không có quyền ghim!")
+        m2 = bot.reply_to(m, "❌ Bạn không có quyền!")
         del_both(m, m2.message_id)
         return
-    
     if m.reply_to_message:
         try:
             bot.pin_chat_message(gid, m.reply_to_message.message_id)
             m2 = bot.reply_to(m, "📌 Đã ghim!")
             del_both(m, m2.message_id)
-        except Exception as e:
-            m2 = bot.reply_to(m, f"❌ Lỗi: {str(e)[:100]}")
-            del_both(m, m2.message_id)
-    else:
-        m2 = bot.reply_to(m, "❌ Reply tin nhắn cần ghim!")
-        del_both(m, m2.message_id)
+        except:
+            pass
 
 @bot.message_handler(commands=['unpin'])
 def unpin_cmd(m):
     gid = m.chat.id
     if not is_admin(m.from_user.id, gid):
-        m2 = bot.reply_to(m, "❌ Bạn không có quyền bỏ ghim!")
+        m2 = bot.reply_to(m, "❌ Bạn không có quyền!")
         del_both(m, m2.message_id)
         return
-    
     try:
         bot.unpin_chat_message(gid)
         m2 = bot.reply_to(m, "✅ Đã bỏ ghim!")
@@ -942,16 +750,215 @@ def unpin_cmd(m):
         pass
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║                    LỆNH FILTER                                              ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+@bot.message_handler(commands=['filter'])
+def filter_cmd(m):
+    gid = m.chat.id
+    gk_str = gk(gid)
+    if not is_admin(m.from_user.id, gid):
+        m2 = bot.reply_to(m, "❌ Bạn không có quyền quản lý filter!")
+        del_both(m, m2.message_id)
+        return
+    parts = m.text.split(maxsplit=2)
+    
+    # /filter - liệt kê
+    if len(parts) == 1:
+        if not filters_db.get(gk_str):
+            m2 = bot.reply_to(m, "📋 Chưa có filter nào!\nDùng: /filter add [từ_khóa] [nội_dung]")
+        else:
+            text = "📋 DANH SÁCH FILTER\n━━━━━━━━━━━━━━━━━━━━\n"
+            for i, (kw, data) in enumerate(filters_db[gk_str].items(), 1):
+                text += f"{i}. <code>{html.escape(kw)}</code> → {html.escape(data.get('reply', '')[:50])}\n"
+            m2 = bot.reply_to(m, text, parse_mode="HTML")
+        del_both(m, m2.message_id)
+        return
+    
+    action = parts[1].lower() if len(parts) > 1 else ""
+    
+    # /filter add
+    if action in ["add", "them", "thêm"]:
+        if len(parts) < 3:
+            m2 = bot.reply_to(m, "❌ /filter add [từ_khóa] [nội_dung]\nHoặc reply tin nhắn: /filter add [từ_khóa]")
+            del_both(m, m2.message_id)
+            return
+        args = parts[2].split(maxsplit=1)
+        if len(args) < 2:
+            if m.reply_to_message and m.reply_to_message.text:
+                keyword = args[0].lower()
+                reply_text = m.reply_to_message.text
+            else:
+                m2 = bot.reply_to(m, "❌ Cần cả từ khóa và nội dung!")
+                del_both(m, m2.message_id)
+                return
+        else:
+            keyword = args[0].lower()
+            reply_text = args[1]
+        if m.reply_to_message and m.reply_to_message.text:
+            reply_text = m.reply_to_message.text
+        filters_db[gk_str][keyword] = {
+            "reply": reply_text,
+            "added_by": m.from_user.id,
+            "added_time": time.time(),
+            "hit_count": 0
+        }
+        save_filters()
+        m2 = bot.reply_to(m,
+            f"✅ ĐÃ LƯU 1 BỘ LỌC\n"
+            f"🔑 Từ khóa: <code>{html.escape(keyword)}</code>\n"
+            f"💬 Nội dung: {html.escape(reply_text[:100])}",
+            parse_mode="HTML"
+        )
+        del_both(m, m2.message_id)
+        return
+    
+    # /filter del
+    elif action in ["del", "delete", "xoa", "xóa", "rm", "remove"]:
+        if len(parts) < 3:
+            m2 = bot.reply_to(m, "❌ /filter del [từ_khóa]")
+            del_both(m, m2.message_id)
+            return
+        keyword = parts[2].lower().strip()
+        if keyword in filters_db.get(gk_str, {}):
+            del filters_db[gk_str][keyword]
+            save_filters()
+            m2 = bot.reply_to(m, f"✅ Đã xóa filter: <code>{html.escape(keyword)}</code>", parse_mode="HTML")
+        else:
+            m2 = bot.reply_to(m, f"❌ Không tìm thấy: <code>{html.escape(keyword)}</code>", parse_mode="HTML")
+        del_both(m, m2.message_id)
+        return
+    
+    # /filter clear
+    elif action in ["clear", "reset"]:
+        count = len(filters_db.get(gk_str, {}))
+        filters_db[gk_str] = {}
+        save_filters()
+        m2 = bot.reply_to(m, f"✅ Đã xóa {count} filter!")
+        del_both(m, m2.message_id)
+        return
+    
+    # /filter stats
+    elif action in ["stats", "info"]:
+        total_hits = sum(f.get("hit_count", 0) for f in filters_db.get(gk_str, {}).values())
+        m2 = bot.reply_to(m,
+            f"📊 FILTER STATS\n"
+            f"🔢 Số filter: {len(filters_db.get(gk_str, {}))}\n"
+            f"🎯 Tổng lượt kích hoạt: {total_hits}",
+            parse_mode="HTML"
+        )
+        del_both(m, m2.message_id)
+        return
+    else:
+        m2 = bot.reply_to(m,
+            "❌ Cú pháp:\n"
+            "/filter - Liệt kê\n"
+            "/filter add [từ] [nội_dung] - Thêm\n"
+            "/filter del [từ] - Xóa\n"
+            "/filter clear - Xóa tất cả\n"
+            "/filter stats - Thống kê"
+        )
+        del_both(m, m2.message_id)
+
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║                    LỆNH QUẢN LÝ TỪ CẤM (BLOCK CHỬI)                       ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+@bot.message_handler(commands=['addbad'])
+def add_bad_word_cmd(m):
+    """Thêm từ cấm vào danh sách"""
+    gid = m.chat.id
+    gk_str = gk(gid)
+    if not is_admin(m.from_user.id, gid):
+        m2 = bot.reply_to(m, "❌ Bạn không có quyền!")
+        del_both(m, m2.message_id)
+        return
+    parts = m.text.split(maxsplit=1)
+    if len(parts) < 2:
+        m2 = bot.reply_to(m, "❌ /addbad [từ_cấm]\nHoặc reply tin nhắn: /addbad")
+        del_both(m, m2.message_id)
+        return
+    word = parts[1].strip().lower()
+    if len(word) < 2:
+        m2 = bot.reply_to(m, "❌ Từ quá ngắn!")
+        del_both(m, m2.message_id)
+        return
+    if gk_str not in bad_words_db:
+        bad_words_db[gk_str] = BAD_WORDS_DEFAULT.copy()
+    if word in bad_words_db[gk_str]:
+        m2 = bot.reply_to(m, f"❌ Từ <code>{html.escape(word)}</code> đã tồn tại!", parse_mode="HTML")
+    else:
+        bad_words_db[gk_str].append(word)
+        save_bad_words()
+        m2 = bot.reply_to(m,
+            f"✅ ĐÃ THÊM TỪ CẤM\n"
+            f"🔑 Từ: <code>{html.escape(word)}</code>\n"
+            f"📊 Tổng: {len(bad_words_db[gk_str])} từ",
+            parse_mode="HTML"
+        )
+    del_both(m, m2.message_id)
+
+@bot.message_handler(commands=['delbad'])
+def del_bad_word_cmd(m):
+    """Xóa từ cấm khỏi danh sách"""
+    gid = m.chat.id
+    gk_str = gk(gid)
+    if not is_admin(m.from_user.id, gid):
+        m2 = bot.reply_to(m, "❌ Bạn không có quyền!")
+        del_both(m, m2.message_id)
+        return
+    parts = m.text.split(maxsplit=1)
+    if len(parts) < 2:
+        m2 = bot.reply_to(m, "❌ /delbad [từ_cấm]")
+        del_both(m, m2.message_id)
+        return
+    word = parts[1].strip().lower()
+    if gk_str in bad_words_db and word in bad_words_db[gk_str]:
+        bad_words_db[gk_str].remove(word)
+        save_bad_words()
+        m2 = bot.reply_to(m, f"✅ Đã xóa từ cấm: <code>{html.escape(word)}</code>", parse_mode="HTML")
+    else:
+        m2 = bot.reply_to(m, f"❌ Không tìm thấy: <code>{html.escape(word)}</code>", parse_mode="HTML")
+    del_both(m, m2.message_id)
+
+@bot.message_handler(commands=['listbad'])
+def list_bad_words_cmd(m):
+    """Liệt kê tất cả từ cấm"""
+    gid = m.chat.id
+    gk_str = gk(gid)
+    words = get_bad_words(gid)
+    if not words:
+        m2 = bot.reply_to(m, "📋 Chưa có từ cấm nào!")
+    else:
+        text = "🚫 DANH SÁCH TỪ CẤM\n━━━━━━━━━━━━━━━━━━━━\n"
+        for i, w in enumerate(words, 1):
+            text += f"{i}. <code>{html.escape(w)}</code>\n"
+        text += f"\n📊 Tổng: {len(words)} từ"
+        m2 = bot.reply_to(m, text, parse_mode="HTML")
+    del_both(m, m2.message_id)
+
+@bot.message_handler(commands=['clearbad'])
+def clear_bad_words_cmd(m):
+    """Xóa tất cả từ cấm của nhóm"""
+    gid = m.chat.id
+    gk_str = gk(gid)
+    if not is_admin(m.from_user.id, gid):
+        m2 = bot.reply_to(m, "❌ Bạn không có quyền!")
+        del_both(m, m2.message_id)
+        return
+    bad_words_db[gk_str] = []
+    save_bad_words()
+    m2 = bot.reply_to(m, "✅ Đã xóa tất cả từ cấm!")
+    del_both(m, m2.message_id)
+
+# ╔══════════════════════════════════════════════════════════════════════════════╗
 # ║                    CÀI ĐẶT NHÓM                                             ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 @bot.message_handler(commands=['settings'])
 def settings_cmd(m):
     gid = m.chat.id
     if not is_admin(m.from_user.id, gid):
-        m2 = bot.reply_to(m, "❌ Bạn không có quyền xem cài đặt!")
+        m2 = bot.reply_to(m, "❌ Bạn không có quyền!")
         del_both(m, m2.message_id)
         return
-    
     s = get_group(gid)["settings"]
     text = (
         f"⚙️ CÀI ĐẶT NHÓM\n━━━━━━━━━━━━━━━━━━━━\n"
@@ -963,8 +970,9 @@ def settings_cmd(m):
         f"🗑️ Xóa từ cấm: {'Bật' if s['delete_bad_words'] else 'Tắt'}\n"
         f"🔗 Xóa link: {'Bật' if s['delete_links'] else 'Tắt'}\n"
         f"🔗 Xóa link TG: {'Bật' if s['delete_telegram_links'] else 'Tắt'}\n"
-        f"💬 AI Chat: {'Bật' if s['ai_chat'] else 'Tắt'}\n\n"
-        f"Dùng /set [key] [value] để thay đổi"
+        f"💬 AI Chat: {'Bật' if s['ai_chat'] else 'Tắt'}\n"
+        f"🔍 Filter: {'Bật' if s.get('filter_enabled', True) else 'Tắt'}\n"
+        f"🚫 Từ cấm: {'Bật' if s.get('bad_words_enabled', True) else 'Tắt'}"
     )
     m2 = bot.reply_to(m, text, parse_mode="HTML")
     del_both(m, m2.message_id)
@@ -976,31 +984,29 @@ def set_cmd(m):
         m2 = bot.reply_to(m, "❌ Bạn không có quyền!")
         del_both(m, m2.message_id)
         return
-    
     parts = m.text.split()
     if len(parts) < 3:
         m2 = bot.reply_to(m,
             "❌ /set [key] [value]\n"
             "Keys: warn_limit, warn_ban_duration, spam_limit, spam_window,\n"
             "      auto_mute_spam, auto_mute_duration, delete_bad_words,\n"
-            "      delete_links, delete_telegram_links, ai_chat"
+            "      delete_links, delete_telegram_links, ai_chat,\n"
+            "      filter_enabled, bad_words_enabled"
         )
         del_both(m, m2.message_id)
         return
-    
     key = parts[1].lower()
     value = parts[2].lower()
-    
     valid_keys = ["warn_limit", "warn_ban_duration", "spam_limit", "spam_window",
                   "auto_mute_spam", "auto_mute_duration", "delete_bad_words",
-                  "delete_links", "delete_telegram_links", "ai_chat"]
-    
+                  "delete_links", "delete_telegram_links", "ai_chat",
+                  "filter_enabled", "bad_words_enabled"]
     if key not in valid_keys:
-        m2 = bot.reply_to(m, f"❌ Key không hợp lệ!\nKeys: {', '.join(valid_keys)}")
+        m2 = bot.reply_to(m, f"❌ Key không hợp lệ!")
         del_both(m, m2.message_id)
         return
-    
-    if key in ["auto_mute_spam", "delete_bad_words", "delete_links", "delete_telegram_links", "ai_chat"]:
+    if key in ["auto_mute_spam", "delete_bad_words", "delete_links", 
+               "delete_telegram_links", "ai_chat", "filter_enabled", "bad_words_enabled"]:
         value = value in ["true", "1", "on", "yes", "bật"]
     else:
         try:
@@ -1009,7 +1015,6 @@ def set_cmd(m):
             m2 = bot.reply_to(m, "❌ Value phải là số!")
             del_both(m, m2.message_id)
             return
-    
     set_group_setting(gid, key, value)
     m2 = bot.reply_to(m, f"✅ Đã đặt {key} = {value}")
     del_both(m, m2.message_id)
@@ -1023,18 +1028,16 @@ def id_cmd(m):
     if m.reply_to_message:
         target = m.reply_to_message.from_user
         m2 = bot.reply_to(m,
-            f"🆔 ID\n"
-            f"👤 {html.escape(target.first_name)}\n"
-            f"🆔 <code>{target.id}</code>\n"
+            f"🆔 {html.escape(target.first_name)}\n"
+            f"👤 <code>{target.id}</code>\n"
             f"💬 <code>{gid}</code>",
             parse_mode="HTML"
         )
     else:
         user = m.from_user
         m2 = bot.reply_to(m,
-            f"🆔 ID\n"
-            f"👤 {html.escape(user.first_name)}\n"
-            f"🆔 <code>{user.id}</code>\n"
+            f"🆔 {html.escape(user.first_name)}\n"
+            f"👤 <code>{user.id}</code>\n"
             f"💬 <code>{gid}</code>",
             parse_mode="HTML"
         )
@@ -1044,17 +1047,14 @@ def id_cmd(m):
 def info_cmd(m):
     gid = m.chat.id
     target = m.reply_to_message.from_user if m.reply_to_message else m.from_user
-    
     gk_str = gk(gid)
-    uid = target.id
-    
     text = (
-        f"📋 THÔNG TIN\n━━━━━━━━━━━━━━━━━━━━\n"
+        f"📋 THÔNG TIN\n"
         f"👤 {html.escape(target.first_name)}\n"
-        f"🆔 <code>{uid}</code>\n"
-        f"⚠️ Warns: {warns[gk_str].get(uid, 0)}/{get_group_setting(gid, 'warn_limit', 3)}\n"
-        f"🔇 Muted: {'Có' if uid in mutes[gk_str] else 'Không'}\n"
-        f"👑 Admin: {'Có' if is_admin(uid, gid) else 'Không'}"
+        f"🆔 <code>{target.id}</code>\n"
+        f"⚠️ Warns: {warns[gk_str].get(target.id, 0)}/3\n"
+        f"🔇 Muted: {'Có' if target.id in mutes[gk_str] else 'Không'}\n"
+        f"👑 Admin: {'Có' if is_admin(target.id, gid) else 'Không'}"
     )
     m2 = bot.reply_to(m, text, parse_mode="HTML")
     del_both(m, m2.message_id)
@@ -1066,28 +1066,44 @@ def banlist_cmd(m):
         m2 = bot.reply_to(m, "❌ Bạn không có quyền!")
         del_both(m, m2.message_id)
         return
-    
     history = ban_history[gk(gid)]
     if not history:
         m2 = bot.reply_to(m, "📋 Chưa có ai bị ban!")
         del_both(m, m2.message_id)
         return
-    
     text = "📋 LỊCH SỬ BAN\n━━━━━━━━━━━━━━━━━━━━\n"
     for h in history[-10:]:
         text += f"👤 {html.escape(h['name'])} - <code>{h['uid']}</code>\n"
         text += f"👮 {html.escape(h['by_name'])} - {datetime.fromtimestamp(h['time']).strftime('%d/%m %H:%M')}\n\n"
-    
     m2 = bot.reply_to(m, text, parse_mode="HTML")
     del_both(m, m2.message_id)
 
-@bot.message_handler(commands=['start'])
+@bot.message_handler(commands=['stats'])
+def stats_cmd(m):
+    gid = m.chat.id
+    try:
+        rc = bot.get_chat_member_count(gid)
+    except:
+        rc = 0
+    gk_str = gk(gid)
+    m2 = bot.reply_to(m,
+        f"📊 THỐNG KÊ\n"
+        f"👥 Members: {rc}\n"
+        f"🔇 Muted: {len(mutes[gk_str])}\n"
+        f"⚠️ Warned: {len(warns[gk_str])}\n"
+        f"🔍 Filters: {len(filters_db.get(gk_str, {}))}\n"
+        f"🚫 Từ cấm: {len(get_bad_words(gid))}\n"
+        f"📋 Nhóm: {len(groups_db)}",
+        parse_mode="HTML"
+    )
+    del_both(m, m2.message_id)
+
+@bot.message_handler(commands=['start', 'help'])
 def start_cmd(m):
     gid = m.chat.id
     set_user_name(m.from_user.id, m.from_user.first_name)
-    
     help_text = (
-        f"🤖 NAO ROBOT V9.0\n━━━━━━━━━━━━━━━━━━━━\n"
+        f"🤖 NAO ROBOT V10.0\n━━━━━━━━━━━━━━━━━━━━\n"
         f"🛡️ QUẢN LÝ:\n"
         f"/mute [user] [time] - Khóa mõm\n"
         f"/unmute [user] - Mở khóa\n"
@@ -1102,12 +1118,26 @@ def start_cmd(m):
         f"/pin - Ghim (reply)\n"
         f"/unpin - Bỏ ghim\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"🔍 FILTER:\n"
+        f"/filter - Liệt kê filter\n"
+        f"/filter add [từ] [nội_dung] - Thêm filter\n"
+        f"/filter del [từ] - Xóa filter\n"
+        f"/filter clear - Xóa tất cả\n"
+        f"/filter stats - Thống kê\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"🚫 TỪ CẤM:\n"
+        f"/addbad [từ] - Thêm từ cấm\n"
+        f"/delbad [từ] - Xóa từ cấm\n"
+        f"/listbad - Danh sách từ cấm\n"
+        f"/clearbad - Xóa tất cả từ cấm\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
         f"📋 THÔNG TIN:\n"
         f"/id - Lấy ID\n"
         f"/info - Thông tin user\n"
         f"/admins - Danh sách admin\n"
         f"/banlist - Lịch sử ban\n"
         f"/settings - Cài đặt nhóm\n"
+        f"/stats - Thống kê\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"👑 MASTER:\n"
         f"/addgroup [id] - Thêm nhóm\n"
@@ -1120,28 +1150,29 @@ def start_cmd(m):
     m2 = bot.reply_to(m, help_text, parse_mode="HTML")
     del_both(m, m2.message_id)
 
-@bot.message_handler(commands=['stats'])
-def stats_cmd(m):
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║                    KIỂM TRA FILTER                                          ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+def check_filters(m) -> bool:
+    """Kiểm tra tin nhắn có khớp filter không, trả về True nếu khớp"""
     gid = m.chat.id
-    try:
-        rc = bot.get_chat_member_count(gid)
-    except:
-        rc = 0
-    
     gk_str = gk(gid)
-    m2 = bot.reply_to(m,
-        f"📊 THỐNG KÊ\n━━━━━━━━━━━━━━━━━━━━\n"
-        f"👥 Members: {rc}\n"
-        f"🔇 Muted: {len(mutes[gk_str])}\n"
-        f"⚠️ Warned: {len(warns[gk_str])}\n"
-        f"📋 Nhóm: {len(groups_db)}\n"
-        f"🧵 Threads: {threading.active_count()}",
-        parse_mode="HTML"
-    )
-    del_both(m, m2.message_id)
+    if not get_group_setting(gid, "filter_enabled", True):
+        return False
+    text = m.text.lower()
+    for keyword, data in filters_db.get(gk_str, {}).items():
+        if keyword in text:
+            data["hit_count"] = data.get("hit_count", 0) + 1
+            save_filters()
+            reply_text = data.get("reply", "")
+            if reply_text:
+                m2 = bot.reply_to(m, html.escape(reply_text), parse_mode="HTML")
+                auto_del(gid, m2.message_id, 30)
+                return True
+    return False
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗
-# ║                    AUTO-MOD - TỰ ĐỘNG KIỂM DUYỆT                           ║
+# ║                    AUTO-MOD                                                 ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 @bot.message_handler(func=lambda m: m.text and not m.text.startswith('/'))
 def auto_mod(m):
@@ -1151,32 +1182,38 @@ def auto_mod(m):
     
     set_user_name(uid, m.from_user.first_name)
     
+    # Kiểm tra filter trước
+    if check_filters(m):
+        return
+    
     # Bỏ qua admin
     if is_admin(uid, gid):
         return
     
     s = get_group(gid)["settings"]
     
-    # ─── KIỂM TRA TỪ CẤM ───
-    if s.get("delete_bad_words", True) and BAD_WORDS_PATTERN.search(m.text):
-        try:
-            bot.delete_message(gid, m.message_id)
-        except:
-            pass
-        warns[gk_str][uid] += 1
-        if warns[gk_str][uid] >= s.get("warn_limit", 3):
+    # Kiểm tra từ cấm
+    if s.get("bad_words_enabled", True) and s.get("delete_bad_words", True):
+        pattern = get_bad_words_pattern(gid)
+        if pattern and pattern.search(m.text):
             try:
-                bot.ban_chat_member(gid, uid, until_date=int(time.time()) + s.get("warn_ban_duration", 3600))
-                bot.send_message(gid, f"🚫 {html.escape(m.from_user.first_name)} bị auto-ban vì vi phạm từ cấm!")
+                bot.delete_message(gid, m.message_id)
             except:
                 pass
-            warns[gk_str][uid] = 0
-        else:
-            m2 = bot.send_message(gid, f"⚠️ {html.escape(m.from_user.first_name)} - Cảnh cáo ({warns[gk_str][uid]}/{s.get('warn_limit', 3)}): Không dùng từ cấm!")
-            auto_del(gid, m2.message_id, 5)
-        return
+            warns[gk_str][uid] += 1
+            if warns[gk_str][uid] >= s.get("warn_limit", 3):
+                try:
+                    bot.ban_chat_member(gid, uid, until_date=int(time.time()) + s.get("warn_ban_duration", 3600))
+                    bot.send_message(gid, f"🚫 {html.escape(m.from_user.first_name)} bị auto-ban vì vi phạm từ cấm!")
+                except:
+                    pass
+                warns[gk_str][uid] = 0
+            else:
+                m2 = bot.send_message(gid, f"⚠️ {html.escape(m.from_user.first_name)} - Cảnh cáo ({warns[gk_str][uid]}/{s.get('warn_limit', 3)}): Không dùng từ cấm!")
+                auto_del(gid, m2.message_id, 5)
+            return
     
-    # ─── KIỂM TRA LINK TELEGRAM ───
+    # Kiểm tra link Telegram
     if s.get("delete_telegram_links", True) and TELEGRAM_LINK.search(m.text):
         try:
             bot.delete_message(gid, m.message_id)
@@ -1186,7 +1223,7 @@ def auto_mod(m):
         auto_del(gid, m2.message_id, 5)
         return
     
-    # ─── KIỂM TRA LINK KHÁC ───
+    # Kiểm tra link khác
     if s.get("delete_links", True) and ALL_LINKS.search(m.text) and not TELEGRAM_LINK.search(m.text):
         try:
             bot.delete_message(gid, m.message_id)
@@ -1196,7 +1233,7 @@ def auto_mod(m):
         auto_del(gid, m2.message_id, 5)
         return
     
-    # ─── KIỂM TRA SPAM ───
+    # Kiểm tra spam
     now = time.time()
     spam_counter[gk_str][uid] = [t for t in spam_counter[gk_str].get(uid, []) if now - t < s.get("spam_window", 4)] + [now]
     
@@ -1229,33 +1266,26 @@ ai_cd = {}
 
 def ask_ai(prompt, gid):
     global ck_idx
-    
     if not get_group_setting(gid, "ai_chat", True):
         return None
-    
     if len(mem) >= 2 and mem[-2] == prompt:
         return mem[-1]
-    
     loai = phan_loai_tin_nhan(prompt)
-    fallback = ai_random.choice(AI_RESPONSES[loai])
-    
+    fallback = random.choice(AI_RESPONSES[loai])
     system_prompt = (
         "Bạn là Nao, trợ lý ảo nữ 18 tuổi người Việt. "
         "Trả lời ngắn gọn dưới 20 từ, thêm 1 emoji. "
         "Gọi người dùng là 'anh'. Không thơ, không dài dòng."
     )
-    
     msgs = [{"role": "system", "content": system_prompt}]
     for t in list(mem)[-6:]:
         idx = list(mem).index(t)
         role = "user" if idx % 2 == 0 else "assistant"
         msgs.append({"role": role, "content": t})
     msgs.append({"role": "user", "content": prompt})
-    
     acquired = ck_lock.acquire(timeout=5)
     if not acquired:
         return fallback
-    
     try:
         for _ in range(len(AI_KEYS)):
             k = AI_KEYS[ck_idx]
@@ -1283,7 +1313,6 @@ def ask_ai(prompt, gid):
             except:
                 k["fail"] = k.get("fail", 0) + 1
             ck_idx = (ck_idx + 1) % len(AI_KEYS)
-        
         for k in AI_KEYS:
             k["status"] = True
             k["fail"] = 0
@@ -1291,25 +1320,20 @@ def ask_ai(prompt, gid):
     finally:
         ck_lock.release()
 
-@bot.message_handler(func=lambda m: m.text and not m.text.startswith('/') and not BAD_WORDS_PATTERN.search(m.text) and not TELEGRAM_LINK.search(m.text))
+@bot.message_handler(func=lambda m: m.text and not m.text.startswith('/'))
 def ai_chat_handler(m):
     gid = m.chat.id
     uid = m.from_user.id
-    
     if not get_group_setting(gid, "ai_chat", True):
         return
-    
     if is_admin(uid, gid):
         return
-    
     if uid in ai_cd and time.time() - ai_cd[uid] < 2:
         return
     ai_cd[uid] = time.time()
-    
     acquired = ai_semaphore.acquire(timeout=5)
     if not acquired:
         return
-    
     def _ai():
         try:
             reply = ask_ai(m.text, gid)
@@ -1320,9 +1344,11 @@ def ai_chat_handler(m):
             logger.error(f"AI error: {e}")
         finally:
             ai_semaphore.release()
-    
     ai_executor.submit(_ai)
 
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║                    WELCOME                                                  ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
 @bot.message_handler(content_types=['new_chat_members'])
 def welcome(m):
     gid = m.chat.id
@@ -1346,7 +1372,7 @@ def cleanup_spam():
         time.sleep(60)
         try:
             now = time.time()
-            for gk_str in spam_counter:
+            for gk_str in list(spam_counter.keys()):
                 for uid in list(spam_counter[gk_str].keys()):
                     spam_counter[gk_str][uid] = [t for t in spam_counter[gk_str][uid] if now - t < 10]
                     if not spam_counter[gk_str][uid]:
@@ -1375,22 +1401,26 @@ def save_data_periodically():
     while True:
         time.sleep(300)
         save_groups()
+        save_bad_words()
+        save_filters()
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗
 # ║                    MAIN                                                     ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 def main():
     logger.info("="*60)
-    logger.info("NAO ROBOT V9.0 - QUAN LY NHOM CHUYEN NGHIEP")
+    logger.info("NAO ROBOT V10.0 - QUAN LY NHOM CHUYEN NGHIEP")
     logger.info(f"Master Admin: {MASTER_ADMIN}")
     logger.info(f"Nhom: {len(groups_db)}")
+    logger.info(f"Filters: {sum(len(f) for f in filters_db.values())}")
+    logger.info(f"Bad words: {sum(len(w) for w in bad_words_db.values())}")
     logger.info("="*60)
     
     Thread(target=cleanup_spam, daemon=True, name="SpamCleanup").start()
     Thread(target=auto_unmute, daemon=True, name="AutoUnmute").start()
     Thread(target=save_data_periodically, daemon=True, name="SaveData").start()
     
-    logger.info("Starting bot...")
+    logger.info("Bot dang khoi dong...")
     bot.infinity_polling(timeout=30, none_stop=True)
 
 if __name__ == "__main__":
