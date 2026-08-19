@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-# NAO ROBOT V10.0 - Bot quản lý nhóm Telegram đầy đủ
-# Tính năng: Quản lý nhóm, AI Chat, Filter, Từ cấm, Auto-Mod
+# NAO ROBOT V11.0 - Bot quản lý nhóm Telegram đầy đủ
+# Tính năng: Quản lý nhóm, AI Chat, Filter (text/file/media), Từ cấm, Auto-Mod
 # Tác giả: baohuydev
 
 import sys, io, os, json, time, random, re, html, logging, traceback, hashlib
@@ -167,14 +167,13 @@ ck_idx = 0
 ck_lock = Lock()
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗
-# ║                    BAD WORDS + FILTERS                                      ║
+# ║                    BAD WORDS                                                ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 BAD_WORDS_DEFAULT = [
     "lồn", "cặc", "địt", "đụ", "chịch", "vãi lồn", "đmm", "clmm",
     "dit", "lon", "cac", "dcm", "vcl", "vl", "dm", "cc", "đéo", "đcm"
 ]
 
-# Database từ cấm theo nhóm
 bad_words_db: Dict[str, List[str]] = defaultdict(list)
 BAD_WORDS_FILE = "bad_words.json"
 
@@ -212,7 +211,9 @@ def get_bad_words_pattern(gid: int):
 
 load_bad_words()
 
-# Database filter theo nhóm
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║                    FILTERS                                                  ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
 filters_db: Dict[str, Dict[str, Dict]] = defaultdict(dict)
 FILTERS_FILE = "filters.json"
 
@@ -750,57 +751,297 @@ def unpin_cmd(m):
         pass
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗
-# ║                    LỆNH FILTER                                              ║
+# ║                    LỆNH FILTER - HỖ TRỢ TEXT VÀ FILE/MEDIA                 ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 @bot.message_handler(commands=['filter'])
 def filter_cmd(m):
+    """Quản lý filter - hỗ trợ lưu text và file/media"""
     gid = m.chat.id
     gk_str = gk(gid)
+    
     if not is_admin(m.from_user.id, gid):
         m2 = bot.reply_to(m, "❌ Bạn không có quyền quản lý filter!")
         del_both(m, m2.message_id)
         return
+    
     parts = m.text.split(maxsplit=2)
     
-    # /filter - liệt kê
+    # /filter - liệt kê tất cả filter
     if len(parts) == 1:
         if not filters_db.get(gk_str):
-            m2 = bot.reply_to(m, "📋 Chưa có filter nào!\nDùng: /filter add [từ_khóa] [nội_dung]")
-        else:
-            text = "📋 DANH SÁCH FILTER\n━━━━━━━━━━━━━━━━━━━━\n"
-            for i, (kw, data) in enumerate(filters_db[gk_str].items(), 1):
-                text += f"{i}. <code>{html.escape(kw)}</code> → {html.escape(data.get('reply', '')[:50])}\n"
-            m2 = bot.reply_to(m, text, parse_mode="HTML")
+            m2 = bot.reply_to(m, 
+                "📋 Chưa có filter nào!\n\n"
+                "Cách dùng:\n"
+                "• Text: /filter add [từ_khóa] [nội_dung]\n"
+                "• File: Reply file + /filter add [từ_khóa]\n"
+                "• Ảnh: Reply ảnh + /filter add [từ_khóa]\n"
+                "• Video: Reply video + /filter add [từ_khóa]\n"
+                "• Sticker: Reply sticker + /filter add [từ_khóa]"
+            )
+            del_both(m, m2.message_id)
+            return
+        
+        text = "📋 DANH SÁCH FILTER\n━━━━━━━━━━━━━━━━━━━━\n"
+        for i, (kw, data) in enumerate(filters_db[gk_str].items(), 1):
+            filter_type = data.get('type', 'text')
+            if filter_type == 'text':
+                preview = data.get('reply', '')[:50]
+                icon = "💬"
+            elif filter_type == 'photo':
+                preview = "🖼️ Ảnh"
+                icon = "🖼️"
+            elif filter_type == 'video':
+                preview = "🎬 Video"
+                icon = "🎬"
+            elif filter_type == 'audio':
+                preview = "🎵 Audio"
+                icon = "🎵"
+            elif filter_type == 'document':
+                preview = f"📄 {data.get('file_name', 'File')}"
+                icon = "📄"
+            elif filter_type == 'sticker':
+                preview = "🏷️ Sticker"
+                icon = "🏷️"
+            elif filter_type == 'animation':
+                preview = "🎞️ GIF"
+                icon = "🎞️"
+            elif filter_type == 'voice':
+                preview = "🎤 Voice"
+                icon = "🎤"
+            elif filter_type == 'video_note':
+                preview = "🎬 Video Note"
+                icon = "🎬"
+            else:
+                preview = data.get('reply', '')[:50]
+                icon = "📦"
+            
+            hit = data.get('hit_count', 0)
+            text += f"{i}. {icon} <code>{html.escape(kw)}</code> → {html.escape(preview)}\n"
+            text += f"   🎯 {hit} lượt kích hoạt\n"
+        
+        text += f"\n📊 Tổng: {len(filters_db[gk_str])} filter"
+        m2 = bot.reply_to(m, text, parse_mode="HTML")
         del_both(m, m2.message_id)
         return
     
     action = parts[1].lower() if len(parts) > 1 else ""
     
-    # /filter add
+    # ─── /filter add - THÊM FILTER ───
     if action in ["add", "them", "thêm"]:
-        if len(parts) < 3:
-            m2 = bot.reply_to(m, "❌ /filter add [từ_khóa] [nội_dung]\nHoặc reply tin nhắn: /filter add [từ_khóa]")
+        args = parts[2].split(maxsplit=1) if len(parts) > 2 else [""]
+        keyword = args[0].lower().strip() if args else ""
+        
+        if not keyword:
+            m2 = bot.reply_to(m, 
+                "❌ Thiếu từ khóa!\n"
+                "• Text: /filter add [từ_khóa] [nội_dung]\n"
+                "• File: Reply file + /filter add [từ_khóa]"
+            )
             del_both(m, m2.message_id)
             return
-        args = parts[2].split(maxsplit=1)
-        if len(args) < 2:
-            if m.reply_to_message and m.reply_to_message.text:
-                keyword = args[0].lower()
-                reply_text = m.reply_to_message.text
-            else:
-                m2 = bot.reply_to(m, "❌ Cần cả từ khóa và nội dung!")
+        
+        if len(keyword) < 2:
+            m2 = bot.reply_to(m, "❌ Từ khóa quá ngắn (tối thiểu 2 ký tự)!")
+            del_both(m, m2.message_id)
+            return
+        
+        # Kiểm tra nếu có reply tin nhắn chứa file/media
+        if m.reply_to_message:
+            rmsg = m.reply_to_message
+            
+            # LƯU ẢNH
+            if rmsg.photo:
+                file_id = rmsg.photo[-1].file_id
+                caption = rmsg.caption or (args[1] if len(args) > 1 else "")
+                filters_db[gk_str][keyword] = {
+                    "type": "photo", "file_id": file_id,
+                    "caption": caption, "reply": caption or "",
+                    "added_by": m.from_user.id, "added_by_name": m.from_user.first_name,
+                    "added_time": time.time(), "hit_count": 0
+                }
+                save_filters()
+                m2 = bot.reply_to(m,
+                    f"✅ ĐÃ LƯU FILTER ẢNH\n"
+                    f"🔑 Từ khóa: <code>{html.escape(keyword)}</code>\n"
+                    f"🖼️ Loại: Ảnh\n"
+                    f"💬 Caption: {html.escape(caption or 'Không có')}",
+                    parse_mode="HTML"
+                )
                 del_both(m, m2.message_id)
                 return
-        else:
-            keyword = args[0].lower()
-            reply_text = args[1]
-        if m.reply_to_message and m.reply_to_message.text:
-            reply_text = m.reply_to_message.text
+            
+            # LƯU VIDEO
+            elif rmsg.video:
+                file_id = rmsg.video.file_id
+                caption = rmsg.caption or (args[1] if len(args) > 1 else "")
+                filters_db[gk_str][keyword] = {
+                    "type": "video", "file_id": file_id,
+                    "caption": caption, "reply": caption or "",
+                    "added_by": m.from_user.id, "added_by_name": m.from_user.first_name,
+                    "added_time": time.time(), "hit_count": 0
+                }
+                save_filters()
+                m2 = bot.reply_to(m,
+                    f"✅ ĐÃ LƯU FILTER VIDEO\n"
+                    f"🔑 Từ khóa: <code>{html.escape(keyword)}</code>\n"
+                    f"🎬 Loại: Video",
+                    parse_mode="HTML"
+                )
+                del_both(m, m2.message_id)
+                return
+            
+            # LƯU AUDIO
+            elif rmsg.audio:
+                file_id = rmsg.audio.file_id
+                caption = rmsg.caption or (args[1] if len(args) > 1 else "")
+                filters_db[gk_str][keyword] = {
+                    "type": "audio", "file_id": file_id,
+                    "caption": caption, "reply": caption or "",
+                    "added_by": m.from_user.id, "added_by_name": m.from_user.first_name,
+                    "added_time": time.time(), "hit_count": 0
+                }
+                save_filters()
+                m2 = bot.reply_to(m,
+                    f"✅ ĐÃ LƯU FILTER AUDIO\n"
+                    f"🔑 Từ khóa: <code>{html.escape(keyword)}</code>\n"
+                    f"🎵 Loại: Audio",
+                    parse_mode="HTML"
+                )
+                del_both(m, m2.message_id)
+                return
+            
+            # LƯU DOCUMENT
+            elif rmsg.document:
+                file_id = rmsg.document.file_id
+                file_name = rmsg.document.file_name or "file"
+                caption = rmsg.caption or (args[1] if len(args) > 1 else "")
+                filters_db[gk_str][keyword] = {
+                    "type": "document", "file_id": file_id,
+                    "file_name": file_name, "caption": caption,
+                    "reply": caption or f"📄 {file_name}",
+                    "added_by": m.from_user.id, "added_by_name": m.from_user.first_name,
+                    "added_time": time.time(), "hit_count": 0
+                }
+                save_filters()
+                m2 = bot.reply_to(m,
+                    f"✅ ĐÃ LƯU FILTER DOCUMENT\n"
+                    f"🔑 Từ khóa: <code>{html.escape(keyword)}</code>\n"
+                    f"📄 File: {html.escape(file_name)}",
+                    parse_mode="HTML"
+                )
+                del_both(m, m2.message_id)
+                return
+            
+            # LƯU STICKER
+            elif rmsg.sticker:
+                file_id = rmsg.sticker.file_id
+                filters_db[gk_str][keyword] = {
+                    "type": "sticker", "file_id": file_id,
+                    "reply": "🏷️ Sticker",
+                    "added_by": m.from_user.id, "added_by_name": m.from_user.first_name,
+                    "added_time": time.time(), "hit_count": 0
+                }
+                save_filters()
+                m2 = bot.reply_to(m,
+                    f"✅ ĐÃ LƯU FILTER STICKER\n"
+                    f"🔑 Từ khóa: <code>{html.escape(keyword)}</code>\n"
+                    f"🏷️ Loại: Sticker",
+                    parse_mode="HTML"
+                )
+                del_both(m, m2.message_id)
+                return
+            
+            # LƯU GIF/ANIMATION
+            elif rmsg.animation:
+                file_id = rmsg.animation.file_id
+                caption = rmsg.caption or (args[1] if len(args) > 1 else "")
+                filters_db[gk_str][keyword] = {
+                    "type": "animation", "file_id": file_id,
+                    "caption": caption, "reply": caption or "",
+                    "added_by": m.from_user.id, "added_by_name": m.from_user.first_name,
+                    "added_time": time.time(), "hit_count": 0
+                }
+                save_filters()
+                m2 = bot.reply_to(m,
+                    f"✅ ĐÃ LƯU FILTER GIF\n"
+                    f"🔑 Từ khóa: <code>{html.escape(keyword)}</code>\n"
+                    f"🎞️ Loại: GIF/Animation",
+                    parse_mode="HTML"
+                )
+                del_both(m, m2.message_id)
+                return
+            
+            # LƯU VOICE
+            elif rmsg.voice:
+                file_id = rmsg.voice.file_id
+                filters_db[gk_str][keyword] = {
+                    "type": "voice", "file_id": file_id,
+                    "reply": "🎤 Voice",
+                    "added_by": m.from_user.id, "added_by_name": m.from_user.first_name,
+                    "added_time": time.time(), "hit_count": 0
+                }
+                save_filters()
+                m2 = bot.reply_to(m,
+                    f"✅ ĐÃ LƯU FILTER VOICE\n"
+                    f"🔑 Từ khóa: <code>{html.escape(keyword)}</code>\n"
+                    f"🎤 Loại: Voice",
+                    parse_mode="HTML"
+                )
+                del_both(m, m2.message_id)
+                return
+            
+            # LƯU VIDEO NOTE
+            elif rmsg.video_note:
+                file_id = rmsg.video_note.file_id
+                filters_db[gk_str][keyword] = {
+                    "type": "video_note", "file_id": file_id,
+                    "reply": "🎬 Video Note",
+                    "added_by": m.from_user.id, "added_by_name": m.from_user.first_name,
+                    "added_time": time.time(), "hit_count": 0
+                }
+                save_filters()
+                m2 = bot.reply_to(m,
+                    f"✅ ĐÃ LƯU FILTER VIDEO NOTE\n"
+                    f"🔑 Từ khóa: <code>{html.escape(keyword)}</code>\n"
+                    f"🎬 Loại: Video Note",
+                    parse_mode="HTML"
+                )
+                del_both(m, m2.message_id)
+                return
+            
+            # LƯU TEXT (reply tin nhắn text)
+            elif rmsg.text:
+                reply_text = rmsg.text
+                filters_db[gk_str][keyword] = {
+                    "type": "text", "reply": reply_text,
+                    "added_by": m.from_user.id, "added_by_name": m.from_user.first_name,
+                    "added_time": time.time(), "hit_count": 0
+                }
+                save_filters()
+                m2 = bot.reply_to(m,
+                    f"✅ ĐÃ LƯU FILTER TEXT\n"
+                    f"🔑 Từ khóa: <code>{html.escape(keyword)}</code>\n"
+                    f"💬 Nội dung: {html.escape(reply_text[:100])}",
+                    parse_mode="HTML"
+                )
+                del_both(m, m2.message_id)
+                return
+        
+        # KHÔNG REPLY - CHỈ LƯU TEXT
+        if len(args) < 2 or not args[1].strip():
+            m2 = bot.reply_to(m, 
+                "❌ Thiếu nội dung!\n"
+                "• Text: /filter add [từ_khóa] [nội_dung]\n"
+                "• File: Reply file + /filter add [từ_khóa]"
+            )
+            del_both(m, m2.message_id)
+            return
+        
+        reply_text = args[1].strip()
         filters_db[gk_str][keyword] = {
-            "reply": reply_text,
-            "added_by": m.from_user.id,
-            "added_time": time.time(),
-            "hit_count": 0
+            "type": "text", "reply": reply_text,
+            "added_by": m.from_user.id, "added_by_name": m.from_user.first_name,
+            "added_time": time.time(), "hit_count": 0
         }
         save_filters()
         m2 = bot.reply_to(m,
@@ -812,7 +1053,7 @@ def filter_cmd(m):
         del_both(m, m2.message_id)
         return
     
-    # /filter del
+    # ─── /filter del - XÓA FILTER ───
     elif action in ["del", "delete", "xoa", "xóa", "rm", "remove"]:
         if len(parts) < 3:
             m2 = bot.reply_to(m, "❌ /filter del [từ_khóa]")
@@ -828,7 +1069,7 @@ def filter_cmd(m):
         del_both(m, m2.message_id)
         return
     
-    # /filter clear
+    # ─── /filter clear - XÓA TẤT CẢ ───
     elif action in ["clear", "reset"]:
         count = len(filters_db.get(gk_str, {}))
         filters_db[gk_str] = {}
@@ -837,23 +1078,39 @@ def filter_cmd(m):
         del_both(m, m2.message_id)
         return
     
-    # /filter stats
+    # ─── /filter stats - THỐNG KÊ ───
     elif action in ["stats", "info"]:
         total_hits = sum(f.get("hit_count", 0) for f in filters_db.get(gk_str, {}).values())
+        total_filters = len(filters_db.get(gk_str, {}))
+        
+        # Đếm theo loại
+        type_counts = Counter(f.get("type", "text") for f in filters_db.get(gk_str, {}).values())
+        type_text = ""
+        type_names = {
+            "text": "💬 Text", "photo": "🖼️ Ảnh", "video": "🎬 Video",
+            "audio": "🎵 Audio", "document": "📄 Document", "sticker": "🏷️ Sticker",
+            "animation": "🎞️ GIF", "voice": "🎤 Voice", "video_note": "🎬 Video Note"
+        }
+        for t, c in type_counts.most_common():
+            type_text += f"{type_names.get(t, '📦 ' + t)}: {c}\n"
+        
         m2 = bot.reply_to(m,
-            f"📊 FILTER STATS\n"
-            f"🔢 Số filter: {len(filters_db.get(gk_str, {}))}\n"
-            f"🎯 Tổng lượt kích hoạt: {total_hits}",
+            f"📊 FILTER STATS\n━━━━━━━━━━━━━━━━━━━━\n"
+            f"🔢 Số filter: {total_filters}\n"
+            f"🎯 Tổng lượt kích hoạt: {total_hits}\n\n"
+            f"📋 Theo loại:\n{type_text}",
             parse_mode="HTML"
         )
         del_both(m, m2.message_id)
         return
+    
     else:
         m2 = bot.reply_to(m,
             "❌ Cú pháp:\n"
-            "/filter - Liệt kê\n"
-            "/filter add [từ] [nội_dung] - Thêm\n"
-            "/filter del [từ] - Xóa\n"
+            "/filter - Liệt kê filter\n"
+            "/filter add [từ] [nội_dung] - Thêm text filter\n"
+            "/filter add [từ] (reply file) - Thêm file filter\n"
+            "/filter del [từ] - Xóa filter\n"
             "/filter clear - Xóa tất cả\n"
             "/filter stats - Thống kê"
         )
@@ -873,7 +1130,7 @@ def add_bad_word_cmd(m):
         return
     parts = m.text.split(maxsplit=1)
     if len(parts) < 2:
-        m2 = bot.reply_to(m, "❌ /addbad [từ_cấm]\nHoặc reply tin nhắn: /addbad")
+        m2 = bot.reply_to(m, "❌ /addbad [từ_cấm]")
         del_both(m, m2.message_id)
         return
     word = parts[1].strip().lower()
@@ -923,7 +1180,6 @@ def del_bad_word_cmd(m):
 def list_bad_words_cmd(m):
     """Liệt kê tất cả từ cấm"""
     gid = m.chat.id
-    gk_str = gk(gid)
     words = get_bad_words(gid)
     if not words:
         m2 = bot.reply_to(m, "📋 Chưa có từ cấm nào!")
@@ -1002,7 +1258,7 @@ def set_cmd(m):
                   "delete_links", "delete_telegram_links", "ai_chat",
                   "filter_enabled", "bad_words_enabled"]
     if key not in valid_keys:
-        m2 = bot.reply_to(m, f"❌ Key không hợp lệ!")
+        m2 = bot.reply_to(m, "❌ Key không hợp lệ!")
         del_both(m, m2.message_id)
         return
     if key in ["auto_mute_spam", "delete_bad_words", "delete_links", 
@@ -1103,7 +1359,7 @@ def start_cmd(m):
     gid = m.chat.id
     set_user_name(m.from_user.id, m.from_user.first_name)
     help_text = (
-        f"🤖 NAO ROBOT V10.0\n━━━━━━━━━━━━━━━━━━━━\n"
+        f"🤖 NAO ROBOT V11.0\n━━━━━━━━━━━━━━━━━━━━\n"
         f"🛡️ QUẢN LÝ:\n"
         f"/mute [user] [time] - Khóa mõm\n"
         f"/unmute [user] - Mở khóa\n"
@@ -1120,7 +1376,8 @@ def start_cmd(m):
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"🔍 FILTER:\n"
         f"/filter - Liệt kê filter\n"
-        f"/filter add [từ] [nội_dung] - Thêm filter\n"
+        f"/filter add [từ] [nội_dung] - Thêm text filter\n"
+        f"/filter add [từ] (reply file) - Thêm file filter\n"
         f"/filter del [từ] - Xóa filter\n"
         f"/filter clear - Xóa tất cả\n"
         f"/filter stats - Thống kê\n"
@@ -1159,16 +1416,67 @@ def check_filters(m) -> bool:
     gk_str = gk(gid)
     if not get_group_setting(gid, "filter_enabled", True):
         return False
+    
     text = m.text.lower()
-    for keyword, data in filters_db.get(gk_str, {}).items():
+    
+    # Sắp xếp filter theo độ dài từ khóa giảm dần (ưu tiên từ khóa dài hơn)
+    sorted_filters = sorted(filters_db.get(gk_str, {}).items(), 
+                           key=lambda x: len(x[0]), reverse=True)
+    
+    for keyword, data in sorted_filters:
         if keyword in text:
             data["hit_count"] = data.get("hit_count", 0) + 1
             save_filters()
-            reply_text = data.get("reply", "")
-            if reply_text:
-                m2 = bot.reply_to(m, html.escape(reply_text), parse_mode="HTML")
-                auto_del(gid, m2.message_id, 30)
-                return True
+            
+            filter_type = data.get("type", "text")
+            
+            try:
+                if filter_type == "text":
+                    reply_text = data.get("reply", "")
+                    m2 = bot.reply_to(m, html.escape(reply_text), parse_mode="HTML")
+                    auto_del(gid, m2.message_id, 30)
+                    
+                elif filter_type == "photo":
+                    m2 = bot.reply_to(m, "🖼️", parse_mode="HTML")
+                    bot.send_photo(gid, data["file_id"], caption=data.get("caption", ""))
+                    bot.delete_message(gid, m2.message_id)
+                    
+                elif filter_type == "video":
+                    m2 = bot.reply_to(m, "🎬", parse_mode="HTML")
+                    bot.send_video(gid, data["file_id"], caption=data.get("caption", ""))
+                    bot.delete_message(gid, m2.message_id)
+                    
+                elif filter_type == "audio":
+                    m2 = bot.reply_to(m, "🎵", parse_mode="HTML")
+                    bot.send_audio(gid, data["file_id"], caption=data.get("caption", ""))
+                    bot.delete_message(gid, m2.message_id)
+                    
+                elif filter_type == "document":
+                    bot.send_document(gid, data["file_id"], caption=data.get("caption", ""))
+                    
+                elif filter_type == "sticker":
+                    bot.send_sticker(gid, data["file_id"])
+                    
+                elif filter_type == "animation":
+                    bot.send_animation(gid, data["file_id"], caption=data.get("caption", ""))
+                    
+                elif filter_type == "voice":
+                    bot.send_voice(gid, data["file_id"])
+                    
+                elif filter_type == "video_note":
+                    bot.send_video_note(gid, data["file_id"])
+                    
+            except Exception as e:
+                logger.error(f"Lỗi gửi filter: {e}")
+                try:
+                    reply_text = data.get("reply", "")
+                    if reply_text:
+                        bot.reply_to(m, html.escape(reply_text), parse_mode="HTML")
+                except:
+                    pass
+            
+            return True
+    
     return False
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗
@@ -1409,7 +1717,7 @@ def save_data_periodically():
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 def main():
     logger.info("="*60)
-    logger.info("NAO ROBOT V10.0 - QUAN LY NHOM CHUYEN NGHIEP")
+    logger.info("NAO ROBOT V11.0 - FULL COMPLETE")
     logger.info(f"Master Admin: {MASTER_ADMIN}")
     logger.info(f"Nhom: {len(groups_db)}")
     logger.info(f"Filters: {sum(len(f) for f in filters_db.values())}")
